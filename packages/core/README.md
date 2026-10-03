@@ -34,21 +34,28 @@ if (!sealed.ok) show(sealed.errors);                            // never hash an
 // 2. Render the card from the envelope and hash what was rendered.
 const renderedDigest = envelopeDigest(renderedEnvelope, sha256); // must equal sealed.value.digest
 
-// 3. Noor taps approve, after local owner unlock.
-const clock = observeClock(persistedClockState, Date.now());
-const result = await approveExact(store, { actionId, renderedDigest, owner, clock, approvalId: uuid(), sha256 });
+// 3. Noor taps approve, after local owner unlock. The request carries NO owner: the store's
+//    getOwnerSession(tenant) is read inside the transaction and checked against the trusted registry.
+const clock = observeClock(persistedClockState, Date.now(), monotonicNowMs /* optional, trusted elapsed time */);
+persist(clock.state);                                            // the high-water mark must survive restarts
+const result = await approveExact(store, { actionId, renderedDigest, confirmation: "tap", clock, approvalId: uuid(), sha256 });
 // result.ok === false carries an enumerated reason: rendered_digest_mismatch, fact_revision_mismatch,
-// expired, clock_suspect, device_not_trusted, unlock_not_allowed, ... Show it; never retry blindly.
+// expired, clock_suspect, no_owner_session, device_not_trusted, session_stale, ... Show it; never retry blindly.
 
-// 4. Worker, later, with signal.
-const check = checkDispatch({ action, clock, currentFactRevision, sha256 });
-if (!check.ok) hold(check.hold);                                 // expired / revoked / fact_revision_changed / needs_reconcile
+// 3b. Noor changes her mind: same session rules, same transaction boundary.
+const revoked = await revokeExact(store, { actionId, clock });  // recalled only when nothing was in flight
+
+// 4. Worker, later, with signal. Load the IMMUTABLE approval record and outbox row for the action.
+const check = checkDispatch({ action, approval, outbox, clock, currentFactRevision, sha256 });
+if (!check.ok) hold(check.hold);                                 // expired / revoked / fact_revision_changed / needs_reconcile / digest_mismatch
 let a = beginDispatch(action);                                   // persist BEFORE the provider call
-try { a = recordAcceptance(a, providerRef); }                   // sent (simulated channel gets a "simulated:" prefix)
+try { a = recordAcceptance(a, await provider.send(check.send)); } // send ONLY check.send: the pinned bytes and stable key
 catch (e) { a = recordFailure(a, provesNoAcceptance(e)); }      // failed (retry with same key) or send_unknown (reconcile)
+// At process start: for every row in `sending`, a = recoverAfterRestart(a)  -> send_unknown, never requeued blindly
 
 // 5. Receipts: authenticated by the host first, then
-const out = applyReceipt(a, receipt, seenProviderEventIds);     // duplicate / would_regress / wrong_reference are ignored and audited
+const out = applyReceipt(a, receipt, seenProviderEventIds);     // pure; duplicate / would_regress / wrong_reference leave both unchanged
+persistTogether(out.action, out.seen);                          // action and seen-set in ONE transaction
 ```
 
 ## Evidence

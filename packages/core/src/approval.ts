@@ -343,6 +343,51 @@ export interface ApproveExactRequest {
   sha256: Sha256;
 }
 
+export interface RevokeExactRequest {
+  actionId: string;
+  clock: ClockReading;
+}
+
+export type RevokeExactResult =
+  | { ok: true; action: StoredAction; recalled: boolean; note: string }
+  | { ok: false; reason: ApprovalFailure | "nothing_to_cancel"; detail: string };
+
+/**
+ * Revoke inside one transaction, with the owner session read from the store. The
+ * action's new state and the audit line are written together. Carrier truth that
+ * arrives later is still recorded by applyReceipt.
+ */
+export async function revokeExact(store: ApprovalStore, req: RevokeExactRequest): Promise<RevokeExactResult> {
+  return store.transaction(async (tx) => {
+    const action = await tx.getAction(req.actionId);
+    if (!action) return { ok: false, reason: "invalid_envelope", detail: `no action ${req.actionId}` };
+    const tenantId = action.envelope.tenant_id;
+    const [trusted, session] = await Promise.all([tx.getTrustedOwner(tenantId), tx.getOwnerSession(tenantId)]);
+    const who = checkOwnerSession(tenantId, session, trusted, req.clock);
+    if (!who.ok) {
+      await tx.appendAudit({ at: formatTimestamp(req.clock.effectiveMs), action_id: req.actionId, event: "revocation_refused", detail: `${who.reason}: ${who.detail}` });
+      return { ok: false, reason: who.reason, detail: who.detail };
+    }
+    if (req.clock.suspect) {
+      await tx.appendAudit({ at: formatTimestamp(req.clock.effectiveMs), action_id: req.actionId, event: "revocation_refused", detail: "clock_suspect" });
+      return { ok: false, reason: "clock_suspect", detail: "device clock is behind its own high-water mark; revocation held" };
+    }
+    if (action.business !== "approved") return { ok: false, reason: "nothing_to_cancel", detail: `business state ${action.business}` };
+    const revokedAt = formatTimestamp(req.clock.effectiveMs);
+    const inFlight = action.transport === "sending" || action.transport === "send_unknown";
+    const accepted = action.transport === "sent" || action.transport === "delivered";
+    if (accepted) {
+      await tx.appendAudit({ at: revokedAt, action_id: req.actionId, event: "cancel_requested_after_acceptance" });
+      return { ok: true, action, recalled: false, note: "cancel_requested_after_acceptance" };
+    }
+    const next: StoredAction = { ...action, business: "revoked", revoked_at: revokedAt };
+    await tx.updateAction(next);
+    const note = inFlight ? "revoked_dispatch_stopped_carrier_truth_pending" : "revoked_before_dispatch";
+    await tx.appendAudit({ at: revokedAt, action_id: req.actionId, event: note });
+    return { ok: true, action: next, recalled: !inFlight, note };
+  });
+}
+
 /**
  * Approve inside one transaction. The owner session is read from the store, not
  * from the request. Returns the refusal instead of throwing so the UI can explain

@@ -12,7 +12,7 @@
  * carrier truth that arrives later.
  */
 
-import type { ApprovalRecord, OutboxRow, StoredAction } from "./approval.js";
+import { type ApprovalRecord, type AuthenticatedSession, checkOwnerSession, idempotencyKey, type OutboxRow, type SessionFailure, type StoredAction, type TrustedOwner } from "./approval.js";
 import type { Sha256 } from "./canon.js";
 import { type ClockReading, formatTimestamp, isExpired } from "./clock.js";
 import { envelopeDigest } from "./envelope.js";
@@ -69,6 +69,9 @@ export function checkDispatch(input: DispatchCheckInput): DispatchDecision {
     return { ok: false, hold: "approval_not_bound", detail: "approval record or outbox row belongs to another action" };
   }
   if (approval.digest !== outbox.digest) return { ok: false, hold: "approval_not_bound", detail: "outbox row was not written with this approval" };
+  if (outbox.idempotency_key !== idempotencyKey(env.tenant_id, env.action_id, approval.digest, input.sha256)) {
+    return { ok: false, hold: "approval_not_bound", detail: "outbox idempotency key is not the stable key for this approval: a fresh key per retry would defeat provider deduplication" };
+  }
   if (action.transport === "sent" || action.transport === "delivered") return { ok: false, hold: "already_accepted", detail: "provider already accepted this action" };
   if (action.transport === "sending" || action.transport === "send_unknown") {
     return { ok: false, hold: "needs_reconcile", detail: "a previous attempt may have been accepted; look the status up or hold for the owner" };
@@ -190,13 +193,25 @@ export interface CancelOutcome {
   note: "revoked_before_dispatch" | "revoked_dispatch_stopped_carrier_truth_pending" | "cancel_requested_after_acceptance" | "nothing_to_cancel";
 }
 
+export type RevocationResult = { ok: true; outcome: CancelOutcome } | { ok: false; reason: SessionFailure | "clock_suspect"; detail: string };
+
 /**
- * Owner revokes an approved action. Before any dispatch this is a guaranteed
- * recall. While sending or send_unknown, dispatch stops (business revoked) but
- * recall is NOT guaranteed: a late acceptance will still be recorded by
- * applyReceipt and the UI must say so. After acceptance nothing can be recalled.
+ * Owner revokes an approved action. Revocation is an owner act: it needs the
+ * same host-established owner session as approval, and a trusted clock. Before
+ * any dispatch it is a guaranteed recall. While sending or send_unknown, dispatch
+ * stops (business revoked) but recall is NOT guaranteed: a late acceptance will
+ * still be recorded by applyReceipt and the UI must say so. After acceptance
+ * nothing can be recalled.
  */
-export function requestCancel(action: StoredAction, clock: ClockReading): CancelOutcome {
+export function decideRevocation(action: StoredAction, session: AuthenticatedSession | null, trusted: TrustedOwner | null, clock: ClockReading): RevocationResult {
+  const who = checkOwnerSession(action.envelope.tenant_id, session, trusted, clock);
+  if (!who.ok) return { ok: false, reason: who.reason, detail: who.detail };
+  if (clock.suspect) return { ok: false, reason: "clock_suspect", detail: "device clock is behind its own high-water mark; revocation held" };
+  return { ok: true, outcome: applyRevocation(action, clock) };
+}
+
+/** The pure state transition. Internal: callers go through decideRevocation (owner session) or revokeExact (transaction). */
+export function applyRevocation(action: StoredAction, clock: ClockReading): CancelOutcome {
   if (action.business !== "approved") return { action, recalled: false, note: "nothing_to_cancel" };
   const revoked: StoredAction = { ...action, business: "revoked", revoked_at: formatTimestamp(clock.effectiveMs) };
   switch (action.transport) {

@@ -40,7 +40,7 @@
     {
       "from": "approved",
       "to": "revoked",
-      "requires": "owner revokes before provider acceptance (transport in queued, sending, failed or send_unknown)"
+      "requires": "owner revokes inside an authenticated owner session (same checks as approval). Guaranteed recall only while transport is none, queued or failed. While sending or send_unknown it stops NEW dispatch and carrier truth stays pending: a later authenticated receipt is still recorded. Not possible after sent or delivered."
     },
     {
       "from": "approved",
@@ -136,7 +136,9 @@
     "Revoke or cancel is guaranteed only before acceptance. After acceptance the transport state stays sent or delivered; the request is recorded as cancel_requested_after_acceptance and the UI says the send cannot be recalled.",
     "Revocation stops further DISPATCH. It does not freeze carrier truth: an authenticated receipt for an action revoked while sending or send_unknown is still recorded (business revoked, transport sent or delivered), so a late acceptance is never hidden.",
     "send_unknown is never retried blindly. Without a reliable status lookup it is held for the owner. A sending lease found abandoned at restart becomes send_unknown.",
-    "Expiry uses a monotonic clock: now_effective = max(wall clock, highest wall clock ever observed). A wall clock behind the high-water mark by more than the tolerance marks the device clock_suspect and holds dispatch; it never extends authority.",
-    "New transport activity (queued, dispatch) requires business state approved. Receipts for an action that was once approved are recorded in any later business state."
+    "New transport activity (queued, dispatch) requires business state approved. Receipts for an action that was once approved are recorded in any later business state.",
+    "Expiry uses a monotonic clock: now_effective = max(wall clock, highest wall clock ever observed). ANY wall clock behind the high-water mark marks the reading clock_suspect and holds approval, revocation and dispatch; there is no tolerance, because repeated small rollbacks could otherwise keep an almost-expired action alive. The only exception is trustworthy elapsed time: when the host supplies a monotonic counter, effective time advances from the mark by the elapsed amount and the wall clock is ignored. Persisted clock state that is not a finite number fails closed.",
+    "Dispatch recomputes the stable idempotency key sha256(tenant_id || action_id || approved digest) and refuses an outbox row whose key differs: a fresh key per retry would defeat provider deduplication.",
+    "Revocation is an owner act and runs in the same transaction boundary as approval: owner session from the host, action state and audit written together."
   ]
 }

@@ -6,16 +6,16 @@
 
 import { describe, expect, it } from "vitest";
 
-import { approveExact, decideApproval, decideRejection, idempotencyKey, providerKey, type ApprovalRecord, type OutboxRow, type StoredAction } from "../src/approval.js";
+import { approveExact, decideApproval, decideRejection, idempotencyKey, providerKey, revokeExact, type ApprovalRecord, type OutboxRow, type StoredAction } from "../src/approval.js";
 import { reconcileSlot, validateAppointment } from "../src/calendar.js";
 import { sourceTextHash } from "../src/canon.js";
-import { observeClock } from "../src/clock.js";
+import { ClockStateError, formatTimestamp, observeClock } from "../src/clock.js";
 import { sealEnvelope, type ActionEnvelope } from "../src/envelope.js";
 import { buildDecisionCards, parseChoice, recordChoice } from "../src/decisions.js";
 import { countUniqueSources, summarizeThemes, summarizeThemesReport, validateEvidenceItem, type SourceText, type TaggedItem } from "../src/evidence.js";
 import { ingestMessages } from "../src/ingest.js";
 import { validateMoney } from "../src/money.js";
-import { applyReceipt, beginDispatch, checkDispatch, recordAcceptance, recordFailure, recoverAfterRestart, requestCancel, retry, transportLabel } from "../src/outbox.js";
+import { applyReceipt, applyRevocation, beginDispatch, checkDispatch, decideRevocation, recordAcceptance, recordFailure, recoverAfterRestart, retry, transportLabel } from "../src/outbox.js";
 import { utf8Encode } from "../src/utf8.js";
 import { clockAt, goodEnvelope, MemoryStore, SESSION, sha256, storedAction, TRUSTED } from "./helpers.js";
 
@@ -448,13 +448,13 @@ describe("test 6: dispatch sends pinned bytes; timeouts, duplicates and late cal
 
   it("cancel before dispatch is a guaranteed recall; cancel after acceptance cannot recall", () => {
     const a = approved();
-    const before = requestCancel(a.action, clockAt(NOW));
+    const before = applyRevocation(a.action, clockAt(NOW));
     expect(before.recalled).toBe(true);
     expect(before.note).toBe("revoked_before_dispatch");
     expect(before.action.business).toBe("revoked");
     expect(checkDispatch(dispatchArgs(a, { action: before.action }))).toMatchObject({ ok: false, hold: "not_approved" });
     const sent = recordAcceptance(beginDispatch(a.action), "p-2");
-    const after = requestCancel(sent, clockAt(NOW));
+    const after = applyRevocation(sent, clockAt(NOW));
     expect(after.recalled).toBe(false);
     expect(after.note).toBe("cancel_requested_after_acceptance");
     expect(after.action.transport).toBe("sent");
@@ -463,7 +463,7 @@ describe("test 6: dispatch sends pinned bytes; timeouts, duplicates and late cal
   it("probe: revoking while sending or send_unknown stops dispatch, is NOT a guaranteed recall, and a late acceptance is still recorded and shown", () => {
     const a = approved();
     const inFlight = recordFailure(beginDispatch(a.action), false); // send_unknown
-    const revoked = requestCancel(inFlight, clockAt(NOW));
+    const revoked = applyRevocation(inFlight, clockAt(NOW));
     expect(revoked.recalled).toBe(false);
     expect(revoked.note).toBe("revoked_dispatch_stopped_carrier_truth_pending");
     expect(revoked.action.business).toBe("revoked");
@@ -493,6 +493,32 @@ describe("test 6: dispatch sends pinned bytes; timeouts, duplicates and late cal
     expect(transportLabel(a.action)).toBe("queued_waiting_for_signal");
     expect(transportLabel(recordAcceptance(beginDispatch(a.action), "x"))).toBe("sent_simulated");
     expect(transportLabel(storedAction(goodEnvelope()))).toBe("not_sent");
+  });
+
+  it("probe: revocation is an owner act and runs in the transaction boundary", async () => {
+    const a = approved();
+    expect(decideRevocation(a.action, null, TRUSTED, clockAt(NOW))).toMatchObject({ ok: false, reason: "no_owner_session" });
+    expect(decideRevocation(a.action, { ...SESSION, device_id: "daughters-phone" }, TRUSTED, clockAt(NOW))).toMatchObject({ ok: false, reason: "device_not_trusted" });
+    expect(decideRevocation(a.action, SESSION, TRUSTED, clockAt(NOW))).toMatchObject({ ok: true, outcome: { recalled: true, note: "revoked_before_dispatch" } });
+    const store = new MemoryStore();
+    const env = goodEnvelope();
+    store.actions.set(env.action_id, storedAction(env));
+    expect((await approveExact(store, { actionId: env.action_id, renderedDigest: env.digest, clock: clockAt(NOW), approvalId: APPROVAL_ID, sha256 })).ok).toBe(true);
+    store.session = null;
+    const refused = await revokeExact(store, { actionId: env.action_id, clock: clockAt(NOW) });
+    expect(refused).toMatchObject({ ok: false, reason: "no_owner_session" });
+    expect(store.actions.get(env.action_id)?.business).toBe("approved");
+    store.session = SESSION;
+    const done = await revokeExact(store, { actionId: env.action_id, clock: clockAt(NOW) });
+    expect(done).toMatchObject({ ok: true, recalled: true, note: "revoked_before_dispatch" });
+    expect(store.actions.get(env.action_id)?.business).toBe("revoked");
+    expect(store.audit.map((x) => x.event)).toEqual(["approval_and_outbox_committed", "revocation_refused", "revoked_before_dispatch"]);
+  });
+
+  it("probe: an outbox row with a fresh per-retry key is not dispatched", () => {
+    const a = approved();
+    const d = checkDispatch(dispatchArgs(a, { outbox: { ...a.outbox, idempotency_key: "f".repeat(64) } }));
+    expect(d).toMatchObject({ ok: false, hold: "approval_not_bound" });
   });
 
   it("provider keys with a length cap derive 128 bits of the same key, never an ad hoc truncation", () => {
@@ -531,6 +557,41 @@ describe("test 8: clock rollback, expiry and revocation cannot extend authority"
     if (!r.ok) expect(["clock_suspect", "expired"]).toContain(r.reason);
     const a = approved(env);
     expect(checkDispatch(dispatchArgs(a, { clock: rolledBack })).ok).toBe(false);
+  });
+
+  it("probe: corrupt clock state fails closed instead of producing NaN authority", () => {
+    expect(() => observeClock({ highWaterMs: Number.NaN }, Date.parse(NOW))).toThrow(ClockStateError);
+    expect(() => observeClock({ highWaterMs: -1 }, Date.parse(NOW))).toThrow(ClockStateError);
+    expect(() => observeClock({ highWaterMs: 0 }, Number.NaN)).toThrow(ClockStateError);
+    expect(() => formatTimestamp(Number.NaN)).toThrow(ClockStateError);
+  });
+
+  it("probe: ANY rollback is suspect, so repeated small resets cannot keep a near-expiry action alive", () => {
+    const env = reseal(goodEnvelope(), { valid_until: "2026-10-03T21:00:30Z" });
+    const atMark = observeClock({ highWaterMs: 0 }, Date.parse("2026-10-03T21:00:00Z"));
+    expect(decideApproval(approveArgs(env, { clock: atMark })).ok).toBe(true);
+    const back60 = observeClock(atMark.state, Date.parse("2026-10-03T20:59:00Z"));
+    expect(back60.suspect).toBe(true);
+    expect(back60.effectiveMs).toBe(atMark.effectiveMs);
+    const r = decideApproval(approveArgs(env, { clock: back60 }));
+    expect(r).toMatchObject({ ok: false, reason: "clock_suspect" });
+    const a = approved(env);
+    expect(checkDispatch(dispatchArgs(a, { clock: back60 }))).toMatchObject({ ok: false, hold: "clock_suspect" });
+    expect(decideRevocation(a.action, SESSION, TRUSTED, back60)).toMatchObject({ ok: false, reason: "clock_suspect" });
+  });
+
+  it("trustworthy monotonic elapsed time advances authority time through a wall-clock rollback", () => {
+    const env = reseal(goodEnvelope(), { valid_until: "2026-10-03T21:00:30Z" });
+    const atMark = observeClock({ highWaterMs: 0 }, Date.parse("2026-10-03T21:00:00Z"), 1_000);
+    // wall clock set back ten minutes, but the monotonic counter says 31 s elapsed
+    const later = observeClock(atMark.state, Date.parse("2026-10-03T20:50:00Z"), 1_000 + 31_000);
+    expect(later.suspect).toBe(false);
+    expect(later.effectiveMs).toBe(Date.parse("2026-10-03T21:00:31Z"));
+    const a = approved(env);
+    expect(checkDispatch(dispatchArgs(a, { clock: later }))).toMatchObject({ ok: false, hold: "expired" });
+    // a monotonic counter that went backwards (reboot) is not trusted: back to the wall-clock rule
+    const rebooted = observeClock(later.state, Date.parse("2026-10-03T20:50:00Z"), 5);
+    expect(rebooted.suspect).toBe(true);
   });
 
   it("expiry is enforced at dispatch even when approval happened in time", () => {

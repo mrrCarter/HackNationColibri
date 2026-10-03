@@ -2,33 +2,68 @@
  * Monotonic time for authority decisions.
  *
  * A device wall clock can be set backwards. If expiry were judged on the wall
- * clock alone, rolling the clock back would resurrect an expired approval. The
- * store keeps the highest wall-clock value it has ever observed; the effective
- * time is the maximum of the two. A wall clock far behind the high-water mark
- * marks the clock suspect, which HOLDS dispatch. It never extends authority.
+ * clock alone, rolling the clock back would resurrect an expired approval, and
+ * repeated small rollbacks could keep an almost-expired action alive forever.
+ *
+ * The store keeps the highest wall-clock value it has ever observed. ANY wall
+ * clock behind that mark makes the reading suspect, which holds approval and
+ * dispatch. The one way out is trustworthy elapsed time: when the host supplies
+ * a monotonic counter (process uptime, CLOCK_MONOTONIC, the OS boot clock), the
+ * effective time advances from the high-water mark by the elapsed amount and a
+ * wall-clock rollback no longer matters. Persisted state that is not a finite
+ * number is corruption and fails closed.
  */
 
 export interface ClockState {
   /** Highest wall-clock value ever observed, ms since epoch. Persisted by the host. */
   highWaterMs: number;
+  /** The host's monotonic counter at the moment highWaterMs was recorded, when the host supplies one. */
+  monotonicAtHighWaterMs?: number;
 }
 
 export interface ClockReading {
   state: ClockState;
   effectiveMs: number;
+  /** True when authority must be held: the wall clock went backwards and no trustworthy elapsed time explains it. */
   suspect: boolean;
 }
 
-export const CLOCK_TOLERANCE_MS = 5 * 60 * 1000;
+export class ClockStateError extends RangeError {
+  override readonly name = "ClockStateError";
+}
 
-export function observeClock(state: ClockState, wallMs: number, toleranceMs: number = CLOCK_TOLERANCE_MS): ClockReading {
-  if (!Number.isFinite(wallMs)) throw new RangeError("wall clock must be a finite number");
-  const highWaterMs = Math.max(state.highWaterMs, wallMs);
-  return {
-    state: { highWaterMs },
-    effectiveMs: Math.max(wallMs, state.highWaterMs),
-    suspect: wallMs < state.highWaterMs - toleranceMs,
-  };
+function finiteNonNegative(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0;
+}
+
+/**
+ * Observe the clocks. `monotonicMs` is optional; when given on consecutive calls
+ * it must come from the same source and never decrease.
+ */
+export function observeClock(state: ClockState, wallMs: number, monotonicMs?: number): ClockReading {
+  if (typeof state !== "object" || state === null || !finiteNonNegative(state.highWaterMs)) {
+    throw new ClockStateError("persisted clock state is not a finite non-negative highWaterMs; refusing to decide authority");
+  }
+  if (state.monotonicAtHighWaterMs !== undefined && !finiteNonNegative(state.monotonicAtHighWaterMs)) {
+    throw new ClockStateError("persisted monotonicAtHighWaterMs is not a finite non-negative number");
+  }
+  if (!finiteNonNegative(wallMs)) throw new ClockStateError("wall clock reading is not a finite non-negative number");
+  if (monotonicMs !== undefined && !finiteNonNegative(monotonicMs)) throw new ClockStateError("monotonic reading is not a finite non-negative number");
+
+  let effectiveMs: number;
+  let suspect: boolean;
+  if (monotonicMs !== undefined && state.monotonicAtHighWaterMs !== undefined && monotonicMs >= state.monotonicAtHighWaterMs) {
+    // Trustworthy elapsed time: authority time advances from the mark regardless of the wall clock.
+    const elapsed = monotonicMs - state.monotonicAtHighWaterMs;
+    effectiveMs = Math.max(wallMs, state.highWaterMs + elapsed);
+    suspect = false;
+  } else {
+    effectiveMs = Math.max(wallMs, state.highWaterMs);
+    suspect = wallMs < state.highWaterMs; // any rollback, no tolerance
+  }
+  const next: ClockState = { highWaterMs: effectiveMs };
+  if (monotonicMs !== undefined) next.monotonicAtHighWaterMs = monotonicMs;
+  return { state: next, effectiveMs, suspect };
 }
 
 const TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/;
@@ -46,6 +81,7 @@ export function parseTimestamp(text: string): number | null {
 }
 
 export function formatTimestamp(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) throw new ClockStateError("cannot format a non-finite time");
   const d = new Date(ms);
   const p = (n: number, w = 2): string => String(n).padStart(w, "0");
   return `${p(d.getUTCFullYear(), 4)}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}Z`;
