@@ -1,0 +1,144 @@
+{
+  "schema": "sauti.states",
+  "schema_version": "1.0.0",
+  "description": "Business state = owner authority over one exact action. Transport state = what a carrier did with it. They never collapse into one field: a sent booking request is not a confirmed booking, and a green approval never means delivered.",
+  "business_states": [
+    "proposed",
+    "approved",
+    "rejected",
+    "expired",
+    "revoked",
+    "cancelled"
+  ],
+  "business_terminal": [
+    "rejected",
+    "expired",
+    "revoked",
+    "cancelled"
+  ],
+  "business_transitions": [
+    {
+      "from": "proposed",
+      "to": "approved",
+      "requires": "approval record in the same transaction: digest match, fact revision match, trusted owner context, not expired"
+    },
+    {
+      "from": "proposed",
+      "to": "rejected",
+      "requires": "owner decision"
+    },
+    {
+      "from": "proposed",
+      "to": "expired",
+      "requires": "monotonic now >= valid_until"
+    },
+    {
+      "from": "proposed",
+      "to": "cancelled",
+      "requires": "facts changed or owner withdrew; a new action id is proposed instead"
+    },
+    {
+      "from": "approved",
+      "to": "revoked",
+      "requires": "owner revokes inside an authenticated owner session (same checks as approval). Guaranteed recall only while transport is none, queued or failed. While sending or send_unknown it stops NEW dispatch and carrier truth stays pending: a later authenticated receipt is still recorded. Not possible after sent or delivered."
+    },
+    {
+      "from": "approved",
+      "to": "expired",
+      "requires": "dispatch check: monotonic now >= valid_until before provider call"
+    },
+    {
+      "from": "approved",
+      "to": "cancelled",
+      "requires": "facts changed before provider acceptance; action held for re-approval under a new id"
+    }
+  ],
+  "transport_states": [
+    "none",
+    "queued",
+    "sending",
+    "sent",
+    "send_unknown",
+    "delivered",
+    "failed"
+  ],
+  "transport_rank": {
+    "none": 0,
+    "queued": 1,
+    "sending": 2,
+    "sent": 3,
+    "delivered": 4
+  },
+  "transport_side_states": [
+    "failed",
+    "send_unknown"
+  ],
+  "transport_transitions": [
+    {
+      "from": "none",
+      "to": "queued",
+      "requires": "written in the approval transaction, never separately"
+    },
+    {
+      "from": "queued",
+      "to": "sending",
+      "requires": "worker holds a lease; dispatch attempt recorded BEFORE the provider call; re-checks approval, revocation, expiry, digest and fact revision"
+    },
+    {
+      "from": "sending",
+      "to": "sent",
+      "requires": "provider accepted; provider_ref stored"
+    },
+    {
+      "from": "sending",
+      "to": "failed",
+      "requires": "proof of non-acceptance (4xx with no message id, connection refused before send)"
+    },
+    {
+      "from": "sending",
+      "to": "send_unknown",
+      "requires": "timeout or ambiguous error after a possible acceptance; ALSO a sending lease found abandoned (process restart, lease expiry). Never requeued blindly."
+    },
+    {
+      "from": "failed",
+      "to": "queued",
+      "requires": "bounded retry with the SAME idempotency key; attempts < budget; business still approved"
+    },
+    {
+      "from": "send_unknown",
+      "to": "sent",
+      "requires": "idempotent provider status lookup or authenticated callback proves acceptance"
+    },
+    {
+      "from": "send_unknown",
+      "to": "failed",
+      "requires": "provider status lookup proves non-acceptance; never by timeout alone"
+    },
+    {
+      "from": "sent",
+      "to": "delivered",
+      "requires": "authenticated, deduplicated provider receipt"
+    },
+    {
+      "from": "sending",
+      "to": "delivered",
+      "requires": "a delivered receipt arriving before the sent receipt: delivery proves acceptance, so the rank jump is allowed and audited"
+    },
+    {
+      "from": "send_unknown",
+      "to": "delivered",
+      "requires": "a delivered receipt proves acceptance"
+    }
+  ],
+  "rules": [
+    "A receipt whose target rank is lower than the current rank is ignored and audited: receipts never regress a state. A delivered receipt may arrive before sent; it is applied because delivery proves acceptance.",
+    "A receipt with a provider event id already seen is ignored. A receipt whose provider reference does not match the recorded one is ignored and audited.",
+    "Revoke or cancel is guaranteed only before acceptance. After acceptance the transport state stays sent or delivered; the request is recorded as cancel_requested_after_acceptance and the UI says the send cannot be recalled.",
+    "Revocation stops further DISPATCH. It does not freeze carrier truth: an authenticated receipt for an action revoked while sending or send_unknown is still recorded (business revoked, transport sent or delivered), so a late acceptance is never hidden.",
+    "send_unknown is never retried blindly. Without a reliable status lookup it is held for the owner. A sending lease found abandoned at restart becomes send_unknown.",
+    "New transport activity (queued, dispatch) requires business state approved. Receipts for an action that was once approved are recorded in any later business state.",
+    "Expiry uses a monotonic clock: now_effective = max(wall clock, highest wall clock ever observed). ANY wall clock behind the high-water mark marks the reading clock_suspect and holds approval, revocation and dispatch; there is no tolerance, because repeated small rollbacks could otherwise keep an almost-expired action alive. The only exception is trustworthy elapsed time: when the host supplies a monotonic counter, effective time advances from the mark by the elapsed amount and the wall clock is ignored. Persisted clock state that is not a finite number fails closed.",
+    "Dispatch recomputes the stable idempotency key sha256(tenant_id || action_id || approved digest) and refuses an outbox row whose key differs: a fresh key per retry would defeat provider deduplication.",
+    "Revocation is an owner act and runs in the same transaction boundary as approval: owner session from the host, action state and audit written together."
+  ]
+}

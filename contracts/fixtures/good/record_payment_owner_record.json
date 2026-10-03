@@ -1,0 +1,36 @@
+{
+  "schema": "sauti.action_envelope",
+  "schema_version": "1.0.0",
+  "action_id": "7a7a7a7a-5678-4def-9abc-0123456789ab",
+  "tenant_id": "demo-farm-001",
+  "kind": "record_payment",
+  "created_at": "2026-10-03T20:05:00Z",
+  "valid_until": "2026-10-03T21:05:00Z",
+  "fact_revision": 1,
+  "recipient": {
+    "channel": "local",
+    "address": "owner",
+    "language": "sw"
+  },
+  "payload": {
+    "type": "record_payment",
+    "booking_id": "synthetic-booking-001",
+    "money": {
+      "amount_minor": 200000,
+      "currency": "KES",
+      "exponent": 2
+    },
+    "method": "mpesa",
+    "reported_by": "owner"
+  },
+  "evidence": [],
+  "preview": {
+    "text": "Thomas, ziara Jumamosi tarehe nne Oktoba, watu wawili. Niandike malipo ya shilingi elfu mbili? (Later phase fixture.)",
+    "render_locale": "sw-KE"
+  },
+  "authority": {
+    "level": "owner",
+    "owner_context_required": true
+  },
+  "digest": "efe35f80e3ee65396ac34cae0728014dd8c268dc8c797153a8863a5738f2f3bc"
+}

@@ -1,0 +1,47 @@
+{
+  "synthetic": true,
+  "expect": "reject",
+  "reason": "passes the pattern; code must reject a non-existent date before hashing",
+  "input": {
+    "schema": "sauti.action_envelope",
+    "schema_version": "1.0.0",
+    "action_id": "42424242-1234-4abc-8123-abcdefabcdef",
+    "tenant_id": "demo-farm-001",
+    "kind": "send_message",
+    "created_at": "2026-02-30T20:00:00Z",
+    "valid_until": "2026-10-04T20:00:00Z",
+    "fact_revision": 1,
+    "recipient": {
+      "channel": "simulated",
+      "address": "SIMULATED:guest-001",
+      "language": "sw"
+    },
+    "payload": {
+      "type": "message",
+      "body": "Asante kwa kututembelea. Ni sehemu gani ya maelekezo iliyokuwa ngumu?",
+      "body_language": "sw",
+      "in_reply_to": "synthetic-review-001",
+      "template_id": "ask_which_direction_step"
+    },
+    "evidence": [
+      {
+        "source_id": "synthetic-review-001",
+        "content_hash": "186045d04f93118af6aba9ff5805cdf0e948bba2fd1d8600e157e594923d2daa",
+        "span": {
+          "start": 34,
+          "end": 69
+        },
+        "quote": "maelekezo ya kufika yalikuwa magumu"
+      }
+    ],
+    "preview": {
+      "text": "SIMULATED tu. Tuma ujumbe huu kwa mgeni 001: Asante kwa kututembelea. Ni sehemu gani ya maelekezo iliyokuwa ngumu? (Haujakaguliwa na mzungumzaji wa Kiswahili.)",
+      "render_locale": "sw-KE"
+    },
+    "authority": {
+      "level": "owner",
+      "owner_context_required": true
+    },
+    "digest": "14c51bfbda3958d55710a7a166b3a9876f9301dbfd0e5406bb193cd3de551684"
+  }
+}
