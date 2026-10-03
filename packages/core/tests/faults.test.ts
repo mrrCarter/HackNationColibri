@@ -10,7 +10,7 @@ import { approveExact, decideApproval, decideRejection, idempotencyKey, provider
 import { reconcileSlot, validateAppointment } from "../src/calendar.js";
 import { sourceTextHash } from "../src/canon.js";
 import { ClockStateError, formatTimestamp, MAX_TIMESTAMP_MS, observeClock } from "../src/clock.js";
-import { sealEnvelope, type ActionEnvelope } from "../src/envelope.js";
+import { envelopeDigest, sealEnvelope, type ActionEnvelope } from "../src/envelope.js";
 import { buildDecisionCards, parseChoice, recordChoice } from "../src/decisions.js";
 import { countUniqueSources, summarizeThemes, summarizeThemesReport, validateEvidenceItem, type SourceText, type TaggedItem } from "../src/evidence.js";
 import { ingestMessages } from "../src/ingest.js";
@@ -85,12 +85,8 @@ describe("test 1: any change invalidates approval", () => {
 
   it("probe: an unknown member with a recomputed digest is rejected INSIDE decideApproval", () => {
     const { digest: _d, ...body } = env;
-    const withExtra = { ...body, priority: "high" } as unknown as Omit<ActionEnvelope, "digest">;
-    const dig = (await_import_digest => await_import_digest)(0);
-    void dig;
     // recompute the digest over the tampered body as an attacker would
-    const sealedLike = { ...withExtra, digest: "" } as unknown as ActionEnvelope;
-    const { envelopeDigest } = require_envelope();
+    const sealedLike = { ...body, priority: "high", digest: "" } as unknown as ActionEnvelope;
     sealedLike.digest = envelopeDigest(sealedLike, sha256);
     const r = decideApproval(approveArgs(sealedLike, { renderedDigest: sealedLike.digest }));
     expect(r.ok).toBe(false);
@@ -103,12 +99,6 @@ describe("test 1: any change invalidates approval", () => {
     if (!r.ok) expect(r.reason).toBe("fact_revision_mismatch");
   });
 });
-
-// vitest transpiles ESM; a tiny indirection keeps the probe above readable without a top-level await.
-function require_envelope(): typeof import("../src/envelope.js") {
-  return envelopeModule;
-}
-import * as envelopeModule from "../src/envelope.js";
 
 describe("test 2: crash boundary cannot split approval from outbox", () => {
   it("commits approval, outbox and state together, with the owner session read from the store", async () => {
