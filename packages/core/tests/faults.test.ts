@@ -211,6 +211,19 @@ describe("test 3: duplicate import does not inflate counts; bad citations fail",
     expect(twoTwo[0]).toMatchObject({ verdict: "conflicting", direction: "mixed" });
   });
 
+  it("DEV-004: a review cross-posted to two platforms is one comment; sources are still listed", () => {
+    const same = "Directions were confusing but the coffee was great.";
+    const srcs = new Map([
+      ["google-1", mk("google-1", same)],
+      ["gyg-1", mk("gyg-1", same)],
+      ["direct-1", mk("direct-1", "Confusing directions.")],
+      ["direct-2", mk("direct-2", "The directions confused us.")],
+    ]);
+    const tagged = [cite(srcs, "google-1", "confusing", "negative"), cite(srcs, "gyg-1", "confusing", "negative"), cite(srcs, "direct-1", "Confusing", "negative"), cite(srcs, "direct-2", "confused", "negative")];
+    const [t] = summarizeThemes(tagged, srcs, sha256);
+    expect(t).toMatchObject({ comment_count: 3, source_count: 4, cross_posted: ["gyg-1"], verdict: "supported", direction: "negative" });
+  });
+
   it("probe DEV-010: a sentiment or theme outside the catalogue is dropped and reported, never thrown or counted", () => {
     const texts = ["Wifi was slow.", "No wifi.", "Wifi again."];
     const srcs = new Map(texts.map((t, i) => [`w${i}`, mk(`w${i}`, t)] as const));

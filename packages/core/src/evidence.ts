@@ -96,8 +96,12 @@ export type ThemeDirection = "positive" | "negative" | "neutral" | "mixed" | nul
 
 export interface ThemeSummary {
   theme: string;
-  /** Unique valid source ids on this theme. The unit is comments. */
+  /** Distinct comments on this theme: unique valid source TEXTS (content hash). A review cross-posted to two platforms is one comment. The unit is comments, never visitors. */
   comment_count: number;
+  /** Unique valid source ids, before cross-post folding. Shown next to comment_count when they differ. */
+  source_count: number;
+  /** Source ids that were folded into another source with identical text. */
+  cross_posted: string[];
   unit: "comments";
   positive_sources: number;
   negative_sources: number;
@@ -180,12 +184,21 @@ export function summarizeThemesReport(tagged: readonly TaggedItem[], sources: Re
     const report = validateEvidence(items.map((i) => i.evidence), sources, sha256, options);
     for (const r of report.rejected) (r.reason === "unsupported_language" ? unsupportedSources : invalidSources).add(r.item.source_id);
     const validIds = new Set(report.valid.map((e) => e.source_id));
+    // Fold cross-posts: two source ids with identical original text are one comment. Counted by content hash.
+    const commentKeyOf = (sourceId: string): string => sources.get(sourceId)?.content_hash ?? sourceId;
+    const firstIdByKey = new Map<string, string>();
+    const crossPosted: string[] = [];
+    for (const id of [...validIds].sort()) {
+      const key = commentKeyOf(id);
+      if (firstIdByKey.has(key)) crossPosted.push(id);
+      else firstIdByKey.set(key, id);
+    }
     const bySentiment: Record<Sentiment, Set<string>> = { positive: new Set(), negative: new Set(), neutral: new Set() };
-    for (const t of items) if (validIds.has(t.evidence.source_id) && isSentiment(t.sentiment)) bySentiment[t.sentiment].add(t.evidence.source_id);
+    for (const t of items) if (validIds.has(t.evidence.source_id) && isSentiment(t.sentiment)) bySentiment[t.sentiment].add(commentKeyOf(t.evidence.source_id));
     const pos = bySentiment.positive.size;
     const neg = bySentiment.negative.size;
     const neu = bySentiment.neutral.size;
-    const count = validIds.size;
+    const count = firstIdByKey.size;
     const lead = Math.max(pos, neg);
     const minority = Math.min(pos, neg);
     let verdict: ThemeVerdict;
@@ -212,6 +225,8 @@ export function summarizeThemesReport(tagged: readonly TaggedItem[], sources: Re
     themes.push({
       theme,
       comment_count: count,
+      source_count: validIds.size,
+      cross_posted: crossPosted,
       unit: "comments",
       positive_sources: pos,
       negative_sources: neg,
