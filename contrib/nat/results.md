@@ -2,6 +2,92 @@
 
 Owner: Nat (independent evaluation and failure fixtures, packet 07). Prepared by muller-claude, Nat's helper.
 
+## R4. W3 HELD-OUT, first run, vs Domain core r1 @ 5dacf07 (freeze candidate), 2026-10-03, 23:45 UTC
+
+**Under test:** `core-r1` @ `5dacf07`, the packages/core r1 HANDOFF to Warden, built against frozen contracts r1.0.
+
+- Domain's own suite passes (73/73).
+- Run 1 uses Domain's adapter `tools/w3-adapter.js`.
+- Run 2 swaps in the product language detector (Max r1, main 6642402) for the adapter's stopword ID.
+
+**Held-out set:** 13 private fixtures, unchanged since the manifest was committed (`run_fixtures.py lint` OK).
+Domain had not seen them.
+
+| Set | Run 1: Domain adapter | Run 2: with Max r1 detector |
+|---|---|---|
+| Dev (control, 37) | 28 pass, 8 partial, 0 fail, 1 not covered | 27 pass, 8 partial, 1 fail (DEV-028, short text → a person, F4), 1 not covered |
+| **Held-out (13)** | **10 pass, 3 fail** | **10 pass, 3 fail** (same three) |
+
+### Held-out failures
+
+These three are now disclosed and retired from the held-out set; they move to dev in the next revision.
+
+| Fixture | Scenario | Observed | Kind and ask | Owner |
+|---|---|---|---|---|
+| HO-001 | The same review cross-posted, differing only in case and spacing | Counted twice: buy_coffee reaches 3 → `supported`, a card on 2 comments | **Count inflation.** The fold key is the exact content hash. Ask: fold on NFC + casefold + whitespace-collapsed text (same author) | Domain; Carter's count-unit decision |
+| HO-012 | A Kikuyu comment whose source **declares** `sw` | Trusted as Swahili and counted: coffee reaches 3 → `supported` | **Wrong metadata trusted.** Max r1 refuses this text when it runs, but a declared language skips detection. Ask: run detection on declared sw/en/de/fr too, and send the item to a person when the detector disagrees | Domain + Max |
+| HO-010 | Noor says "sitaki kujaribu" ("I don't want to try") | Recorded as **reject** | **Expectation dispute, not a safety failure.** The property under test, never read as a try, holds. The fixture expected nothing recorded; reject is a defensible reading. Held-out files are hash-locked and were not edited. Decision: Nat | Nat |
+
+The 10 passing held-out fixtures are not described here, so they stay blind for the next run.
+
+**Verdict on core r1:**
+
+- **Two real defects.** HO-001 and HO-012 each let a finding reach 3 comments on insufficient evidence, so Noor
+  would see a card that the rules say she should not.
+- **Everything else holds** on unseen scenarios.
+
+## L1. Language-ID held-out: Max's fixed detector r1 on main @ 6642402 (PR #13), 2026-10-03, 23:35 UTC
+
+The set and the scorer are the same as L0; the texts were not shown to Max.
+
+| Category | n | Correct | Abstained (to a person) | Wrong |
+|---|---|---|---|---|
+| Kikuyu / Kamba / Luo, full lines | 11 | 10 | – | **1** |
+| Kikuyu / Kamba / Luo, first 5 words | 2 | 1 | – | **1** |
+| Sheng (acceptable: sw or unsure) | 4 | 3 | 1 | 0 |
+| 2–3 word reviews, sw/en/de/fr | 12 | 0 | 12 | 0 |
+
+**Results:**
+
+- **Critical errors fall from 9 to 2 of 13.** Every Kikuyu and Luo item is now refused.
+- **The 2 remaining errors are both Kamba** (LID-kam-03, full line; LID-kam-04, first 5 words), labeled **sw**.
+  Max's own vectors had no Kamba, so the Kikuyu-specific refusals do not generalize to the next Bantu language.
+- **Short reviews:** all still go to a person, which is the documented F4 trade-off. The product should use the
+  platform's language field where it exists.
+
+**Verdict:** not yet safe to count a source labeled sw without a declared language. Kamba-speaking visitors' or
+neighbours' messages would be read as Swahili. The fix and re-test are Max's; the held-out stays private.
+
+## L0. Language-ID held-out baseline: Max's detector on main @ eb44394 (2026-10-03, 23:30 UTC)
+
+**Set:** [eval/langid](../../eval/langid/README.md), 29 private items, SHA-256 in `eval/langid/heldout_manifest.json`.
+
+- 13 Kikuyu, Kamba and Luo lines from FLORES-200 devtest (CC-BY-SA 4.0). 2 of them are truncated to their first 5
+  words.
+- 4 synthetic Sheng lines.
+- 12 synthetic 2–3 word reviews, 3 each in sw, en, de and fr.
+
+**Under test:** `contrib/max/langid/detect_language.mjs` as merged in #7 (franc 6.2.0 restricted to sw/en/de/fr,
+"unsure" under 4 words, score < 0.5 or margin < 0.2). This is the version **before** Max's F2/F4 fix.
+
+| Category | n | Correct | Abstained (to a person) | Wrong |
+|---|---|---|---|---|
+| Kikuyu / Kamba / Luo, full lines | 11 | 4 | – | **7** |
+| Kikuyu / Kamba / Luo, first 5 words | 2 | 0 | – | **2** |
+| Sheng (acceptable: sw or unsure) | 4 | 4 | 0 | 0 |
+| 2–3 word reviews, sw/en/de/fr | 12 | 0 | 12 | 0 |
+
+**Results:**
+
+- **Critical errors: 9 of 13.** Non-target text was labeled as a supported language, mostly sw, so it would be read
+  and counted as Swahili. This confirms R3 finding F2 on independent text.
+- **Short reviews:** none of the 12 is answered. Each costs a person's attention (F4).
+- **Next:** rerun on Max's fixed commit with the same command. Only aggregates and wrong ids will be published.
+
+```
+node eval/langid/score_detector.mjs <checkout>/contrib/max/langid/detect_language.mjs
+```
+
 ## R3. W3 dev fixtures vs Claude Domain core @ 991f223, three adapters (2026-10-03, 23:10 UTC)
 
 **Under test:** `claude-domain` @ `991f223`, which adds ingest, decision cards and owner choice (ffd2e90), plus
