@@ -14,6 +14,7 @@ import { envelopeDigest, sealEnvelope, type ActionEnvelope } from "../src/envelo
 import { buildDecisionCards, parseChoice, recordChoice } from "../src/decisions.js";
 import { countUniqueSources, summarizeThemes, summarizeThemesReport, validateEvidenceItem, type SourceText, type TaggedItem } from "../src/evidence.js";
 import { ingestMessages } from "../src/ingest.js";
+import { proposeFollowUp, unexplainedNumbers } from "../src/proposals.js";
 import { analyzeFeedback, parseModelOutput } from "../src/tagging.js";
 import { validateMoney } from "../src/money.js";
 import { applyReceipt, applyRevocation, beginDispatch, checkDispatch, decideRevocation, recordAcceptance, recordFailure, recoverAfterRestart, retry, transportLabel } from "../src/outbox.js";
@@ -339,6 +340,63 @@ describe("W3 steps 4 and 5: decision cards and the owner's choice", () => {
     const again = ingestMessages([batch[0]!], sha256, first.sources);
     expect(again.sources.size).toBe(0);
     expect(again.duplicates).toEqual(["g1"]);
+  });
+});
+
+describe("card to follow-up proposal: evidence carried, no invented number, exact approval path", () => {
+  const mk = (id: string, t: string): SourceText => ({ source_id: id, text: t, content_hash: sourceTextHash(t, sha256), language: "en" });
+  const texts = ["Directions were confusing.", "The directions were confusing for us too.", "Confusing directions, lovely coffee at 2000 shillings."];
+  const srcs = new Map(texts.map((t, i) => [`s${i}`, mk(`s${i}`, t)] as const));
+  const cite = (id: string, q: string): TaggedItem => {
+    const s = srcs.get(id)!;
+    const st = s.text.indexOf(q);
+    return { theme: "directions", sentiment: "negative", evidence: { source_id: id, content_hash: s.content_hash, span: { start: st, end: st + q.length }, quote: q } };
+  };
+  const card = buildDecisionCards(summarizeThemesReport([cite("s0", "confusing"), cite("s1", "confusing"), cite("s2", "Confusing directions")], srcs, sha256), sha256)[0]!;
+  const base = {
+    card,
+    sources: srcs,
+    recipient: { channel: "simulated" as const, address: "SIMULATED:guest-001", language: "en" },
+    tenant_id: "demo-farm-001",
+    action_id: "42424242-1234-4abc-8123-abcdefabcdef",
+    fact_revision: 1,
+    owner_fact_numbers: ["2000", "elfu mbili", "09:00"],
+    created_at_ms: Date.parse(NOW),
+    valid_for_ms: 24 * 3600 * 1000,
+  };
+  const template = { template_id: "ask_which_direction_step", body: "Thank you for visiting. Which part of the directions was confusing?", body_language: "en", preview_text: "Send to guest 001: Thank you for visiting. Which part of the directions was confusing?", render_locale: "en" };
+
+  it("builds a sealed envelope that carries the card's evidence and approves through the normal path", () => {
+    const r = proposeFollowUp({ ...base, template }, sha256);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.envelope.kind).toBe("send_message");
+    expect(r.envelope.evidence.map((e) => e.source_id)).toEqual(["s0", "s1", "s2"]);
+    expect(r.envelope.payload).toMatchObject({ type: "message", in_reply_to: "s0", template_id: "ask_which_direction_step" });
+    expect(r.envelope.valid_until).toBe("2026-10-04T21:00:00Z");
+    expect(decideApproval(approveArgs(r.envelope)).ok).toBe(true);
+  });
+
+  it("refuses a body or preview with a number that exists nowhere in facts, counts or quotes", () => {
+    const invented = proposeFollowUp({ ...base, template: { ...template, body: "We now charge 1500 shillings and open at 09:00." } }, sha256);
+    expect(invented).toMatchObject({ ok: false, reason: "invented_number", detail: expect.stringContaining("1500") });
+    const fromFacts = proposeFollowUp({ ...base, template: { ...template, body: "Tours cost 2000 shillings (elfu mbili) and start at 09:00." } }, sha256);
+    expect(fromFacts.ok).toBe(true);
+    const fromQuote = proposeFollowUp({ ...base, template: { ...template, preview_text: "3 comments mention directions; coffee at 2000 shillings was praised." } }, sha256);
+    expect(fromQuote.ok).toBe(true);
+    const swWords = proposeFollowUp({ ...base, template: { ...template, body: "Tutawapa wageni watano kahawa." } }, sha256);
+    expect(swWords).toMatchObject({ ok: false, reason: "invented_number" });
+    expect(unexplainedNumbers("saa tatu asubuhi, 2,000 KES", new Set(["2,000"]))).toEqual(["tatu"]);
+  });
+
+  it("refuses a card without quotes and an invalid recipient for the kind", () => {
+    const noQuotes = proposeFollowUp({ ...base, card: { ...card, quotes: [] }, template }, sha256);
+    expect(noQuotes).toMatchObject({ ok: false, reason: "card_without_evidence" });
+    const wrongChannel = proposeFollowUp({ ...base, recipient: { channel: "local", address: "owner", language: "sw" }, template: { ...template, preview_text: "Send: Thank you for visiting." } }, sha256);
+    expect(wrongChannel).toMatchObject({ ok: false, reason: "invalid_envelope" });
+    // the recipient's own digits are an identifier, not a claim
+    const phone = proposeFollowUp({ ...base, recipient: { channel: "sms", address: "+254700000001", language: "en" }, template: { ...template, preview_text: "Send to +254700000001: Thank you for visiting." } }, sha256);
+    expect(phone.ok).toBe(true);
   });
 });
 
