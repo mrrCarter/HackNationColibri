@@ -64,6 +64,58 @@ export function makeRevision(sheet: FarmSheet, revision: number, source: string,
 
 export type FactValue = FarmSheet[FactField];
 
+const WEEKDAYS_SET: ReadonlySet<string> = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+const CLOCK = /^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/;
+
+/**
+ * The farm setup screen (Shamba) submits a sheet; code validates every field,
+ * no model involved. A field left empty is null ("Noor has not told us").
+ */
+export function validateFarmSheet(input: unknown): { ok: true; sheet: FarmSheet } | { ok: false; errors: string[] } {
+  const errors: string[] = [];
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return { ok: false, errors: ["$: must be an object"] };
+  const o = input as Record<string, unknown>;
+  const known = ["price_per_person_kes", "capacity_per_tour", "days", "hours", "directions_sw", "inclusions_sw"];
+  for (const k of Object.keys(o)) if (!known.includes(k)) errors.push(`$.${k}: unknown field`);
+  const intOrNull = (k: string, min: number, max: number): number | null => {
+    const v = o[k];
+    if (v === undefined || v === null) return null;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) {
+      errors.push(`$.${k}: must be a whole number ${min}..${max}`);
+      return null;
+    }
+    return v;
+  };
+  const price = intOrNull("price_per_person_kes", 1, 1_000_000);
+  const capacity = intOrNull("capacity_per_tour", 1, 200);
+  let days: Weekday[] | null = null;
+  if (o["days"] !== undefined && o["days"] !== null) {
+    if (!Array.isArray(o["days"]) || o["days"].length === 0 || !o["days"].every((d) => typeof d === "string" && WEEKDAYS_SET.has(d))) errors.push("$.days: must be a non-empty list of mon..sun");
+    else days = [...new Set(o["days"] as Weekday[])];
+  }
+  let hours: FarmSheet["hours"] = null;
+  if (o["hours"] !== undefined && o["hours"] !== null) {
+    const h = o["hours"] as Record<string, unknown>;
+    if (typeof h !== "object" || typeof h["start"] !== "string" || typeof h["end"] !== "string" || !CLOCK.test(h["start"]) || !CLOCK.test(h["end"])) errors.push("$.hours: must be {start, end} as HH:MM:SS");
+    else if (h["end"] <= h["start"]) errors.push("$.hours: tour must end after it starts");
+    else hours = { start: h["start"], end: h["end"] };
+  }
+  let directions: string | null = null;
+  if (o["directions_sw"] !== undefined && o["directions_sw"] !== null) {
+    const d = o["directions_sw"];
+    if (typeof d !== "string" || d.trim().split(/\s+/).length < 3 || d.length > 2000) errors.push("$.directions_sw: at least three words, at most 2000 characters");
+    else directions = d.trim();
+  }
+  let inclusions: string[] | null = null;
+  if (o["inclusions_sw"] !== undefined && o["inclusions_sw"] !== null) {
+    const list = o["inclusions_sw"];
+    if (!Array.isArray(list) || !list.every((s) => typeof s === "string" && s.trim().length > 1 && s.length <= 200)) errors.push("$.inclusions_sw: a list of short texts");
+    else inclusions = (list as string[]).map((s) => s.trim());
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, sheet: { price_per_person_kes: price, capacity_per_tour: capacity, days, hours, directions_sw: directions, inclusions_sw: inclusions } };
+}
+
 export type ParsedValue = { ok: true; value: NonNullable<FactValue> } | { ok: false; reason: "no_readable_value"; detail: string };
 
 /** Code reads the dictated value for a field. Anything unreadable is a refusal, never a guess. */

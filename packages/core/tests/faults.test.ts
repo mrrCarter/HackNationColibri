@@ -14,7 +14,8 @@ import { envelopeDigest, sealEnvelope, type ActionEnvelope } from "../src/envelo
 import { buildDecisionCards, parseChoice, recordChoice } from "../src/decisions.js";
 import { countUniqueSources, summarizeThemes, summarizeThemesReport, validateEvidenceItem, type SourceText, type TaggedItem } from "../src/evidence.js";
 import { ingestMessages } from "../src/ingest.js";
-import { confirmFactChange, type FarmSheet, makeRevision, proposeFactChange } from "../src/facts.js";
+import { type Booking, type BookingRequest, checkCapacity, confirmBooking, proposeBooking, recordArrival } from "../src/bookings.js";
+import { confirmFactChange, type FarmSheet, makeRevision, proposeFactChange, validateFarmSheet } from "../src/facts.js";
 import { proposeFollowUp, unexplainedNumbers } from "../src/proposals.js";
 import { parseAmount, parseConfirmation, parseHours } from "../src/swahili.js";
 import { analyzeFeedback, parseModelOutput } from "../src/tagging.js";
@@ -459,6 +460,70 @@ describe("W3 step 6: owner fact changes come only from Noor's words, apply only 
     expect(yes.applied.drafts.map((d) => d.channel)).toEqual(["google_business", "getyourguide", "osm"]);
     expect(yes.applied.drafts.every((d) => d.published === false && d.field === "price_per_person_kes" && d.value === 1500)).toBe(true);
     expect(new Set(yes.applied.drafts.map((d) => d.draft_id)).size).toBe(3);
+  });
+});
+
+describe("v1 scope: farm setup validation, booking proposals on the authoritative calendar, arrival records", () => {
+  const sheet: FarmSheet = {
+    price_per_person_kes: 2000,
+    capacity_per_tour: 10,
+    days: ["mon", "tue", "wed", "thu", "fri", "sat"],
+    hours: { start: "09:00:00", end: "15:00:00" },
+    directions_sw: "Kutoka soko la Othaya fuata barabara ya kanisa kilomita mbili",
+    inclusions_sw: ["kahawa", "chakula cha mchana"],
+  };
+  const facts = makeRevision(sheet, 1, "w1_setup", Date.parse(NOW), sha256);
+  const request: BookingRequest = { request_id: "r1", visitor_name: "Thomas", contact: { channel: "simulated", address: "SIMULATED:guest-001", language: "en" }, date: "2026-10-10", time: "09:00", party_size: 2 };
+  const base = { request, facts, confirmed: [] as Booking[], tenant_id: "demo-farm-001", action_id: "42424242-1234-4abc-8123-abcdefabcdef", booking_id: "b-1", created_at_ms: Date.parse(NOW), valid_for_ms: 86_400_000, preview_text: "Thomas, 2 watu, 2026-10-10 09:00, KES 4000. Nithibitishe?", render_locale: "sw-KE" };
+
+  it("validateFarmSheet accepts a complete sheet, allows unknown fields to stay null, and refuses bad values", () => {
+    expect(validateFarmSheet(sheet)).toMatchObject({ ok: true, sheet });
+    expect(validateFarmSheet({ price_per_person_kes: 2000 })).toMatchObject({ ok: true, sheet: { price_per_person_kes: 2000, capacity_per_tour: null, days: null } });
+    expect(validateFarmSheet({ price_per_person_kes: 0 })).toMatchObject({ ok: false });
+    expect(validateFarmSheet({ hours: { start: "15:00:00", end: "09:00:00" } })).toMatchObject({ ok: false });
+    expect(validateFarmSheet({ days: ["funday"] })).toMatchObject({ ok: false });
+    expect(validateFarmSheet({ directions_sw: "too short" })).toMatchObject({ ok: false });
+    expect(validateFarmSheet({ price_per_person_kes: 2000, extra: 1 })).toMatchObject({ ok: false });
+  });
+
+  it("checkCapacity answers from the farm sheet and confirmed seats; missing facts ask a person", () => {
+    expect(checkCapacity(sheet, [], request)).toMatchObject({ ok: true, remaining_after: 8, slot_id: "2026-10-10T09:00", price: { amount_minor: 400000, currency: "KES", exponent: 2 } });
+    expect(checkCapacity(sheet, [], { ...request, date: "2026-10-11" })).toMatchObject({ ok: false, reason: "closed_day" }); // a Sunday
+    expect(checkCapacity(sheet, [], { ...request, time: "16:00" })).toMatchObject({ ok: false, reason: "outside_hours" });
+    expect(checkCapacity(sheet, [], { ...request, date: "2026-02-30" })).toMatchObject({ ok: false, reason: "bad_date" });
+    expect(checkCapacity({ ...sheet, price_per_person_kes: null }, [], request)).toMatchObject({ ok: false, reason: "missing_fact" });
+    const nine: Booking = { booking_id: "b-0", request: { ...request, request_id: "r0", party_size: 9 }, slot_id: "2026-10-10T09:00", slot_start: "09:00", slot_end: "15:00", price: { amount_minor: 1800000, currency: "KES", exponent: 2 }, fact_revision: 1, state: "confirmed", arrival: null };
+    expect(checkCapacity(sheet, [nine], request)).toMatchObject({ ok: false, reason: "no_capacity" });
+    expect(checkCapacity(sheet, [nine], { ...request, party_size: 1 })).toMatchObject({ ok: true, remaining_after: 0 });
+  });
+
+  it("a booking proposal is one exact book_slot envelope; confirmation re-checks seats and only on the authoritative calendar", () => {
+    const p = proposeBooking(base, sha256);
+    expect(p.ok).toBe(true);
+    if (!p.ok) return;
+    expect(p.envelope).toMatchObject({ kind: "book_slot", recipient: { channel: "local" }, payload: { type: "book_slot", booking_id: "b-1", party_size: 2, price: { amount_minor: 400000 } } });
+    expect(p.booking.state).toBe("tentative");
+    expect(decideApproval(approveArgs(p.envelope)).ok).toBe(true);
+    const confirmed = confirmBooking(p.booking, p.envelope, sheet, [], true, NOW);
+    expect(confirmed).toMatchObject({ ok: true, booking: { state: "confirmed" } });
+    // two devices, one seat left: offline device stays tentative; the authoritative one confirms; a third request is declined
+    const nine: Booking = { ...p.booking, booking_id: "b-9", request: { ...request, request_id: "r9", party_size: 8 }, state: "confirmed" };
+    expect(confirmBooking(p.booking, p.envelope, sheet, [nine], false, NOW)).toMatchObject({ ok: false, reason: "not_authoritative" });
+    expect(confirmBooking(p.booking, p.envelope, sheet, [nine], true, NOW)).toMatchObject({ ok: true });
+    expect(confirmBooking({ ...p.booking, request: { ...request, party_size: 3 } }, p.envelope, sheet, [nine], true, NOW)).toMatchObject({ ok: false, reason: "envelope_mismatch" });
+    const other = proposeBooking({ ...base, booking_id: "b-2", action_id: "7a7a7a7a-5678-4def-9abc-0123456789ab", request: { ...request, request_id: "r2", party_size: 3 } }, sha256);
+    expect(other.ok).toBe(true);
+    if (other.ok) expect(confirmBooking(other.booking, other.envelope, sheet, [nine, (confirmed as { ok: true; booking: Booking }).booking], true, NOW)).toMatchObject({ ok: false, reason: "no_capacity" });
+    expect(proposeBooking({ ...base, request: { ...request, date: "2026-10-11" } }, sha256)).toMatchObject({ ok: false, reason: "closed_day" });
+  });
+
+  it("arrival is an owner record on a confirmed booking only; nothing is sent", () => {
+    const p = proposeBooking(base, sha256);
+    if (!p.ok) throw new Error("fixture");
+    expect(recordArrival(p.booking, "arrived")).toMatchObject({ ok: false, reason: "not_confirmed" });
+    const c = confirmBooking(p.booking, p.envelope, sheet, [], true, NOW);
+    if (!c.ok) throw new Error("fixture");
+    expect(recordArrival(c.booking, "no_show")).toMatchObject({ ok: true, booking: { arrival: "no_show", state: "confirmed" } });
   });
 });
 
