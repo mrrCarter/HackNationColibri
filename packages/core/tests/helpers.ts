@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-import type { ApprovalRecord, ApprovalStore, ApprovalTx, AuditEntry, OutboxRow, StoredAction, TrustedOwner } from "../src/approval.js";
+import type { ApprovalRecord, ApprovalStore, ApprovalTx, AuditEntry, AuthenticatedSession, OutboxRow, StoredAction, TrustedOwner } from "../src/approval.js";
 import type { Sha256 } from "../src/canon.js";
 import { observeClock, type ClockReading } from "../src/clock.js";
 import type { ActionEnvelope } from "../src/envelope.js";
@@ -35,12 +35,25 @@ export function storedAction(envelope: ActionEnvelope, overrides: Partial<Stored
   return { envelope, business: "proposed", transport: "none", revoked_at: null, provider_ref: null, attempts: 0, ...overrides };
 }
 
-export const OWNER = { owner_id: "demo-owner-001", device_id: "demo-android-001", unlock: "pin" as const, session_id: "local-session-0001" };
+export const TENANT = "demo-farm-001";
+
+/** The host-established owner session (what the keystore-backed unlock says). */
+export const SESSION: AuthenticatedSession = {
+  tenant_id: TENANT,
+  owner_id: "demo-noor-001",
+  device_id: "demo-android-001",
+  unlock: "pin",
+  session_id: "local-session-0001",
+  authenticated_at: "2026-10-03T20:55:00Z",
+};
 
 export const TRUSTED: TrustedOwner = {
-  owner_id: "demo-owner-001",
+  tenant_id: TENANT,
+  owner_id: "demo-noor-001",
   trusted_device_ids: new Set(["demo-android-001"]),
   allowed_unlock: new Set(["pin", "biometric"]),
+  max_session_age_ms: 15 * 60 * 1000,
+  revoked_session_ids: new Set(["local-session-revoked"]),
 };
 
 /**
@@ -55,6 +68,7 @@ export class MemoryStore implements ApprovalStore {
   audit: AuditEntry[] = [];
   factRevision = 1;
   trusted: TrustedOwner | null = TRUSTED;
+  session: AuthenticatedSession | null = SESSION;
   crashAfterApprovalInsert = false;
   crashAfterOutboxInsert = false;
 
@@ -73,6 +87,9 @@ export class MemoryStore implements ApprovalStore {
       },
       async getTrustedOwner() {
         return self.trusted;
+      },
+      async getOwnerSession() {
+        return self.session;
       },
       async insertApproval(record) {
         if (approvals.has(record.action_id)) throw new Error("unique violation: approval for action exists");

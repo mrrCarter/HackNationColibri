@@ -1,14 +1,14 @@
 {
   "synthetic": true,
   "expect": "reject",
-  "reason": "timestamps are RFC 3339 UTC with a literal Z",
+  "reason": "kind record_payment with a message payload on an sms/simulated channel: the allOf binding rejects it",
   "input": {
     "schema": "sauti.action_envelope",
     "schema_version": "1.0.0",
     "action_id": "42424242-1234-4abc-8123-abcdefabcdef",
     "tenant_id": "demo-farm-001",
-    "kind": "send_message",
-    "created_at": "2026-10-03T20:00:00+00:00",
+    "kind": "record_payment",
+    "created_at": "2026-10-03T20:00:00Z",
     "valid_until": "2026-10-04T20:00:00Z",
     "fact_revision": 1,
     "recipient": {
@@ -42,6 +42,6 @@
       "level": "owner",
       "owner_context_required": true
     },
-    "digest": "1cfa0b8a1fa42b70ebb9ea3b172477307fba29e1de367c83f3be02535aa7b94f"
+    "digest": "212d2296b49cf315c6c62c8accb1d509d910b408031e478bb96df9b2eeb3a378"
   }
 }

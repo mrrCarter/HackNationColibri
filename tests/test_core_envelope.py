@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -37,8 +38,18 @@ def good_envelopes() -> list[Path]:
 def test_good_envelope_validates_and_digest_matches(path: Path) -> None:
     env = load(path)
     assert not list(ENVELOPE.iter_errors(env))
+    assert _window_valid(env)
     body = {k: v for k, v in env.items() if k != "digest"}
     assert canon.digest(canon.ENVELOPE_DOMAIN, body) == env["digest"]
+
+
+def test_integral_float_hashes_like_the_integer() -> None:
+    # "1.0" parses as float in Python and as 1 in JS; both must hash identically (codex review, 22:22Z).
+    assert canon.canonical_bytes({"fact_revision": 1.0}) == canon.canonical_bytes({"fact_revision": 1})
+    with pytest.raises(canon.CanonError):
+        canon.canonical_bytes({"fact_revision": 1.5})
+    with pytest.raises(canon.CanonError):
+        canon.canonical_bytes({"fact_revision": 2**53})
 
 
 def test_good_approval_binds_to_its_envelope() -> None:
@@ -60,11 +71,25 @@ def test_bad_fixture_is_rejected(path: Path) -> None:
     schema_errors = list(ENVELOPE.iter_errors(data))
     if schema_errors:
         return  # rejected at the schema gate
-    # Schema-valid bad inputs must fail a later code check: digest or evidence.
+    # Schema-valid bad inputs must fail a later code check: calendar, window, digest or evidence.
     body = {k: v for k, v in data.items() if k != "digest"}
+    window_ok = _window_valid(data)
     digest_ok = canon.digest(canon.ENVELOPE_DOMAIN, body) == data.get("digest")
     evidence_ok = all(_evidence_item_valid(item) for item in data.get("evidence", []))
-    assert not (digest_ok and evidence_ok), case["reason"]
+    assert not (window_ok and digest_ok and evidence_ok), case["reason"]
+
+
+def _parse_ts(text: str) -> datetime | None:
+    try:
+        return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _window_valid(env: dict) -> bool:
+    """Code gate every implementation must apply after the schema: real dates and a non-empty window."""
+    created, until = _parse_ts(env["created_at"]), _parse_ts(env["valid_until"])
+    return created is not None and until is not None and until > created
 
 
 def _evidence_item_valid(item: dict) -> bool:

@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 from sauti.core.canon import ENVELOPE_DOMAIN, canonical_bytes, digest, source_text_hash  # noqa: E402
 
 FIX = ROOT / "contracts" / "fixtures"
-TENANT = "demo-owner-001"
+TENANT = "demo-farm-001"  # the business; the owner is demo-noor-001. Distinct on purpose.
 NOTE = "Synthetic fixture. Not a real customer, not native-reviewed Swahili, not a send receipt."
 
 
@@ -118,10 +118,12 @@ def main() -> None:
         "decision": "approved",
         "decided_at": "2026-10-03T20:10:00Z",
         "owner_context": {
-            "owner_id": TENANT,
+            "owner_id": "demo-noor-001",
             "device_id": "demo-android-001",
             "unlock": "pin",
+            "confirmation": "tap",
             "session_id": "local-session-0001",
+            "authenticated_at": "2026-10-03T20:08:00Z",
         },
     }
     write(FIX / "good" / "approval_send_message.json", approval)
@@ -147,6 +149,31 @@ def main() -> None:
     no_owner_ctx = dict(approval)
     del no_owner_ctx["owner_context"]
     bad.append(("approval_without_owner_context", no_owner_ctx, "hash equality is not owner authentication"))
+    voice_only = json.loads(json.dumps(approval))
+    voice_only["owner_context"]["unlock"] = "voice_confirm"
+    bad.append(("approval_voice_confirm_as_unlock", voice_only, "voice or text confirmation alone never authenticates an owner session"))
+    kind_mismatch = json.loads(json.dumps(send_message))
+    kind_mismatch["kind"] = "record_payment"
+    kind_mismatch = with_digest(kind_mismatch)
+    bad.append(("kind_payload_channel_mismatch", kind_mismatch, "kind record_payment with a message payload on an sms/simulated channel: the allOf binding rejects it"))
+    impossible_ts = json.loads(json.dumps(send_message))
+    impossible_ts["created_at"] = "2026-99-99T25:61:61Z"
+    impossible_ts = with_digest(impossible_ts)
+    bad.append(("timestamp_impossible_fields", impossible_ts, "month 99, day 99, hour 25: the bounded pattern rejects it"))
+    feb30 = json.loads(json.dumps(send_message))
+    feb30["created_at"] = "2026-02-30T20:00:00Z"
+    feb30 = with_digest(feb30)
+    bad.append(("timestamp_not_a_calendar_date", feb30, "passes the pattern; code must reject a non-existent date before hashing"))
+    window = json.loads(json.dumps(send_message))
+    window["valid_until"] = window["created_at"]
+    window = with_digest(window)
+    bad.append(("validity_window_empty", window, "valid_until must be after created_at; code check, not expressible in the schema"))
+    big_rev = json.loads(json.dumps(send_message))
+    big_rev["fact_revision"] = 2**53
+    big_rev["digest"] = "0" * 64  # the canonicalizer refuses to hash it, which is the point
+    bad.append(("fact_revision_above_safe_integer", big_rev, "2^53 is above the schema maximum and outside JS exact integers"))
+    for stale in (FIX / "bad").glob("*.json"):
+        stale.unlink()
     for name, data, reason in bad:
         write(FIX / "bad" / f"{name}.json", {"synthetic": True, "expect": "reject", "reason": reason, "input": data})
 

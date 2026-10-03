@@ -37,6 +37,8 @@ def _check(value: Any, path: str = "$") -> None:
     if isinstance(value, float):
         if not math.isfinite(value):
             raise CanonError(f"{path}: non-finite number")
+        if value.is_integer() and abs(value) <= 2**53 - 1:
+            return  # "1.0" parses as a float in Python and as 1 in JS; JCS serialises both as 1, see _normalize
         raise CanonError(f"{path}: floats are not allowed in envelopes; use integer units")
     if isinstance(value, dict):
         for key, item in value.items():
@@ -51,10 +53,21 @@ def _check(value: Any, path: str = "$") -> None:
     raise CanonError(f"{path}: unsupported type {type(value).__name__}")
 
 
+def _normalize(value: Any) -> Any:
+    """Integral floats become ints so Python and JS hash the same bytes; everything else passes through."""
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, dict):
+        return {k: _normalize(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_normalize(v) for v in value]
+    return value
+
+
 def canonical_bytes(value: Any) -> bytes:
     """RFC 8785 bytes of a JSON-compatible value made of objects, arrays, strings, ints, bools, null."""
     _check(value)
-    return rfc8785.dumps(value)
+    return rfc8785.dumps(_normalize(value))
 
 
 def digest(domain: bytes, value: Any) -> str:

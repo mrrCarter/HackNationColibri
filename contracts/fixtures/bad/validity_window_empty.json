@@ -1,15 +1,15 @@
 {
   "synthetic": true,
   "expect": "reject",
-  "reason": "timestamps are RFC 3339 UTC with a literal Z",
+  "reason": "valid_until must be after created_at; code check, not expressible in the schema",
   "input": {
     "schema": "sauti.action_envelope",
     "schema_version": "1.0.0",
     "action_id": "42424242-1234-4abc-8123-abcdefabcdef",
     "tenant_id": "demo-farm-001",
     "kind": "send_message",
-    "created_at": "2026-10-03T20:00:00+00:00",
-    "valid_until": "2026-10-04T20:00:00Z",
+    "created_at": "2026-10-03T20:00:00Z",
+    "valid_until": "2026-10-03T20:00:00Z",
     "fact_revision": 1,
     "recipient": {
       "channel": "simulated",
@@ -42,6 +42,6 @@
       "level": "owner",
       "owner_context_required": true
     },
-    "digest": "1cfa0b8a1fa42b70ebb9ea3b172477307fba29e1de367c83f3be02535aa7b94f"
+    "digest": "c08c78791e4b3fe8558f1cd17885efe13f5992c091e0223a903f7d387d394d99"
   }
 }

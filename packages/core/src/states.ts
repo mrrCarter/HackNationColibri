@@ -42,6 +42,8 @@ export const TRANSPORT_TRANSITIONS: ReadonlyArray<readonly [TransportState, Tran
   ["send_unknown", "sent"],
   ["send_unknown", "failed"],
   ["sent", "delivered"],
+  ["sending", "delivered"],
+  ["send_unknown", "delivered"],
 ];
 
 export class TransitionError extends Error {
@@ -67,8 +69,8 @@ export function assertTransport(from: TransportState, to: TransportState): void 
   if (!canTransitionTransport(from, to)) throw new TransitionError("transport", from, to);
 }
 
-/** Transport states exist only while business state is approved. */
-export function transportAllowed(business: BusinessState): boolean {
+/** New transport ACTIVITY (queueing, dispatch) requires business state approved. Receipts for a past dispatch are recorded in any state. */
+export function dispatchAllowed(business: BusinessState): boolean {
   return business === "approved";
 }
 
@@ -86,7 +88,7 @@ export function receiptAllowed(current: TransportState, incoming: TransportState
   return cur !== undefined && inc !== undefined && inc > cur;
 }
 
-/** Revoke or cancel is guaranteed only before provider acceptance. */
-export function recallPossible(transport: TransportState): boolean {
-  return transport === "none" || transport === "queued" || transport === "sending" || transport === "failed" || transport === "send_unknown";
+/** Recall is GUARANTEED only when nothing was ever in flight. sending and send_unknown can be revoked for dispatch purposes, but a late acceptance may still arrive. */
+export function recallGuaranteed(transport: TransportState): boolean {
+  return transport === "none" || transport === "queued" || transport === "failed";
 }

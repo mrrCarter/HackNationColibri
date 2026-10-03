@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/xamalow/HackNationColibri/contracts/action-envelope.schema.json",
   "title": "Sauti action envelope",
-  "description": "One exact action Noor may approve. Everything the owner sees and everything a transport will do is bound into the digest. Changing any field voids the approval. Revision 1.0.0, see contracts/README.md.",
+  "description": "One exact action Noor may approve. Everything the owner sees and everything a transport will do is bound into the digest. Changing any field voids the approval. Schema validation comes BEFORE hashing; the allOf block binds kind to payload type and recipient channel. Revision 1.0.0, see contracts/README.md.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -40,12 +40,12 @@
     "kind": {
       "enum": [
         "send_message",
-        "send_reply",
         "book_slot",
         "record_payment",
         "publish_listing",
         "reply_to_review"
-      ]
+      ],
+      "description": "send_message covers replies too: set payload.in_reply_to. reply_to_review targets a listing's review."
     },
     "created_at": {
       "$ref": "#/$defs/timestamp"
@@ -57,7 +57,8 @@
     "fact_revision": {
       "type": "integer",
       "minimum": 1,
-      "description": "farm_sheet_versions.version the action was built from. A newer farm sheet voids approval."
+      "maximum": 9007199254740991,
+      "description": "farm_sheet_versions.version the action was built from. Bounded to 2^53-1 so every runtime represents it exactly. A newer farm sheet voids approval."
     },
     "recipient": {
       "$ref": "#/$defs/recipient"
@@ -109,8 +110,8 @@
     },
     "timestamp": {
       "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
-      "description": "RFC 3339, UTC, second precision, literal Z."
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$",
+      "description": "RFC 3339, UTC, second precision, literal Z. The pattern bounds each field; calendar validity (no 2026-02-30) and valid_until > created_at are enforced by code before hashing, in every implementation."
     },
     "bcp47": {
       "type": "string",
@@ -193,7 +194,7 @@
         },
         "content_hash": {
           "$ref": "#/$defs/sha256",
-          "description": "sha256 of the immutable original source text, UTF-8."
+          "description": "Domain-separated hash of the immutable original text: sha256('sauti.source_text.v1' || 0x00 || utf8(text)), lowercase hex. Not a plain sha256 of the text."
         },
         "span": {
           "type": "object",
@@ -284,7 +285,9 @@
         },
         "in_reply_to": {
           "type": "string",
-          "maxLength": 128
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Source id of the message or review being answered. Present = this is a reply."
         },
         "booking_id": {
           "type": "string",
@@ -414,5 +417,159 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "send_message"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "type": {
+                "const": "message"
+              }
+            }
+          },
+          "recipient": {
+            "properties": {
+              "channel": {
+                "enum": [
+                  "sms",
+                  "whatsapp",
+                  "simulated"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "reply_to_review"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "type": {
+                "const": "message"
+              }
+            }
+          },
+          "recipient": {
+            "properties": {
+              "channel": {
+                "enum": [
+                  "google_business",
+                  "getyourguide",
+                  "simulated"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "book_slot"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "type": {
+                "const": "book_slot"
+              }
+            }
+          },
+          "recipient": {
+            "properties": {
+              "channel": {
+                "enum": [
+                  "local"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "record_payment"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "type": {
+                "const": "record_payment"
+              }
+            }
+          },
+          "recipient": {
+            "properties": {
+              "channel": {
+                "enum": [
+                  "local"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "publish_listing"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "type": {
+                "const": "publish_listing"
+              }
+            }
+          },
+          "recipient": {
+            "properties": {
+              "channel": {
+                "enum": [
+                  "google_business",
+                  "getyourguide",
+                  "osm",
+                  "simulated"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

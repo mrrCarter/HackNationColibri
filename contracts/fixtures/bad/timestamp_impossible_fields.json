@@ -1,14 +1,14 @@
 {
   "synthetic": true,
   "expect": "reject",
-  "reason": "timestamps are RFC 3339 UTC with a literal Z",
+  "reason": "month 99, day 99, hour 25: the bounded pattern rejects it",
   "input": {
     "schema": "sauti.action_envelope",
     "schema_version": "1.0.0",
     "action_id": "42424242-1234-4abc-8123-abcdefabcdef",
     "tenant_id": "demo-farm-001",
     "kind": "send_message",
-    "created_at": "2026-10-03T20:00:00+00:00",
+    "created_at": "2026-99-99T25:61:61Z",
     "valid_until": "2026-10-04T20:00:00Z",
     "fact_revision": 1,
     "recipient": {
@@ -42,6 +42,6 @@
       "level": "owner",
       "owner_context_required": true
     },
-    "digest": "1cfa0b8a1fa42b70ebb9ea3b172477307fba29e1de367c83f3be02535aa7b94f"
+    "digest": "c02df9006e3c145d736061b533813f345218b509849d6e8dd710577853759b88"
   }
 }

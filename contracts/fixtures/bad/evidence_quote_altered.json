@@ -6,7 +6,7 @@
     "schema": "sauti.action_envelope",
     "schema_version": "1.0.0",
     "action_id": "42424242-1234-4abc-8123-abcdefabcdef",
-    "tenant_id": "demo-owner-001",
+    "tenant_id": "demo-farm-001",
     "kind": "send_message",
     "created_at": "2026-10-03T20:00:00Z",
     "valid_until": "2026-10-04T20:00:00Z",
@@ -42,6 +42,6 @@
       "level": "owner",
       "owner_context_required": true
     },
-    "digest": "4123ce62e7ef11f6f04a7ed4b92e9409cf34ddf358ea4782bed3fffb66d841e9"
+    "digest": "8781a149d3255261bda311a94f47a95e73ae356876b0579d5ba666c2cfc8a44d"
   }
 }

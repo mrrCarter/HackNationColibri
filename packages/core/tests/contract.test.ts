@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { validateApprovalRecord } from "../src/approval.js";
 import { canonicalBytes, digest, ENVELOPE_DOMAIN, sourceTextHash } from "../src/canon.js";
 import { envelopeDigest, sealEnvelope, validateEnvelope, verifyEnvelope, type ActionEnvelope } from "../src/envelope.js";
 import { validateEvidence, type SourceText } from "../src/evidence.js";
@@ -27,14 +28,22 @@ describe("contract fixtures (shared with the Python reference)", () => {
   it.each(listJson(join(FIXTURES, "bad")))("bad fixture %s is rejected", (path) => {
     const c = loadJson<{ reason: string; input: Record<string, unknown> }>(path);
     if (c.input["schema"] === "sauti.approval_record") {
-      // approval structure is checked by the host before decideApproval; here: owner_context must exist
-      expect("owner_context" in c.input).toBe(false);
+      expect(validateApprovalRecord(c.input).ok, c.reason).toBe(false);
       return;
     }
     const v = verifyEnvelope(c.input, sha256);
     if (!v.ok) return;
     const ev = validateEvidence(v.value.evidence, sources(), sha256);
     expect(ev.rejected.length, c.reason).toBeGreaterThan(0);
+  });
+
+  it("good approval record validates and binds to its envelope", () => {
+    const approval = loadJson<Record<string, unknown>>(join(FIXTURES, "good", "approval_send_message.json"));
+    const env = goodEnvelope();
+    const v = validateApprovalRecord(approval);
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    expect(approval["action_id"]).toBe(env.action_id);
+    expect(approval["digest"]).toBe(env.digest);
   });
 
   it("digest vectors reproduce byte for byte", () => {

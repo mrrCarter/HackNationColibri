@@ -16,7 +16,8 @@ import { type Money, validateMoney } from "./money.js";
 export const ENVELOPE_SCHEMA = "sauti.action_envelope";
 export const ENVELOPE_SCHEMA_VERSION = "1.0.0";
 
-export const KINDS = ["send_message", "send_reply", "book_slot", "record_payment", "publish_listing", "reply_to_review"] as const;
+/** send_message covers replies too (payload.in_reply_to). reply_to_review answers a listing's review. */
+export const KINDS = ["send_message", "book_slot", "record_payment", "publish_listing", "reply_to_review"] as const;
 export type Kind = (typeof KINDS)[number];
 
 export const CHANNELS = ["sms", "whatsapp", "simulated", "google_business", "getyourguide", "osm", "local"] as const;
@@ -108,11 +109,19 @@ const CLOCK = /^\d{2}:\d{2}$/;
 
 const PAYLOAD_TYPE_FOR_KIND: Readonly<Record<Kind, Payload["type"]>> = {
   send_message: "message",
-  send_reply: "message",
   reply_to_review: "message",
   book_slot: "book_slot",
   record_payment: "record_payment",
   publish_listing: "publish_listing",
+};
+
+/** Mirrors the allOf binding in the JSON Schema: which channels each kind may use. */
+export const CHANNELS_FOR_KIND: Readonly<Record<Kind, readonly Channel[]>> = {
+  send_message: ["sms", "whatsapp", "simulated"],
+  reply_to_review: ["google_business", "getyourguide", "simulated"],
+  book_slot: ["local"],
+  record_payment: ["local"],
+  publish_listing: ["google_business", "getyourguide", "osm", "simulated"],
 };
 
 class Errors {
@@ -177,7 +186,7 @@ function validatePayload(kind: Kind, input: unknown, path: string, e: Errors): P
       const body = str(input, "body", path, e, 1, 4000);
       const lang = str(input, "body_language", path, e, 1, 40, BCP47);
       const out: MessagePayload = { type: "message", body: body ?? "", body_language: lang ?? "" };
-      if ("in_reply_to" in input) { const v = str(input, "in_reply_to", path, e, 0, 128); if (v !== undefined) out.in_reply_to = v; }
+      if ("in_reply_to" in input) { const v = str(input, "in_reply_to", path, e, 1, 128); if (v !== undefined) out.in_reply_to = v; }
       if ("booking_id" in input) { const v = str(input, "booking_id", path, e, 0, 128); if (v !== undefined) out.booking_id = v; }
       if ("template_id" in input) { const v = str(input, "template_id", path, e, 0, 64); if (v !== undefined) out.template_id = v; }
       return body !== undefined && lang !== undefined ? out : undefined;
@@ -266,10 +275,8 @@ export function validateEnvelope(input: unknown): Validation<ActionEnvelope> {
   }
 
   const payload = kind !== undefined ? validatePayload(kind, input["payload"], "$.payload", e) : undefined;
-  if (kind !== undefined && recipient !== undefined) {
-    const local = kind === "book_slot" || kind === "record_payment";
-    if (local && recipient.channel !== "local") e.add("$.recipient.channel", `must be "local" for kind ${kind}`);
-    if (!local && recipient.channel === "local") e.add("$.recipient.channel", `must not be "local" for kind ${kind}`);
+  if (kind !== undefined && recipient !== undefined && !CHANNELS_FOR_KIND[kind].includes(recipient.channel)) {
+    e.add("$.recipient.channel", `kind ${kind} allows channels ${CHANNELS_FOR_KIND[kind].join(", ")}`);
   }
 
   const evidence: EvidenceItem[] = [];
