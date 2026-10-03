@@ -15,8 +15,9 @@
 import { createHash } from "node:crypto";
 
 import { type Sha256 } from "../canon.js";
-import { buildDecisionCards, type DecisionCard, recordChoice } from "../decisions.js";
+import { buildDecisionCards, type Choice, type DecisionCard, recordChoice } from "../decisions.js";
 import { type ThemeSummary } from "../evidence.js";
+import { type AppliedFactChange, confirmFactChange, type FactChangeProposal, type FactRevision, type FarmSheet, makeRevision, proposeFactChange } from "../facts.js";
 import { ingestMessages, type StoredSource } from "../ingest.js";
 import { analyzeFeedback, type FeedbackAnalysis } from "../tagging.js";
 
@@ -58,7 +59,11 @@ function detectLanguage(text: string): string | null {
 type OwnerInput =
   | { type: "show_cards" }
   | { type: "owner_says"; card_theme?: string; transcript?: string; asr_uncertain?: boolean }
-  | { type: "new_messages"; messages?: unknown[]; labels?: unknown[] };
+  | { type: "new_messages"; messages?: unknown[]; labels?: unknown[] }
+  | { type: "owner_dictates"; card_theme?: string; transcript?: string; asr_uncertain?: boolean }
+  | { type: "owner_confirms_change"; card_theme?: string; transcript?: string; asr_uncertain?: boolean }
+  | { type: "facts_changed"; owner_facts?: unknown; source?: string }
+  | { type: "crash_and_restart"; at?: string };
 
 interface Input {
   messages?: unknown[];
@@ -67,10 +72,26 @@ interface Input {
   owner_inputs?: OwnerInput[];
 }
 
-const STEP6_INPUTS = new Set(["owner_dictates", "owner_confirms_change", "facts_changed", "crash_and_restart"]);
+const FIXTURE_NOW_MS = Date.parse("2026-10-03T21:00:00Z"); // the harness clock; the product's host supplies time
 
-function step6Driven(input: Input): boolean {
-  return (input.owner_inputs ?? []).some((s) => STEP6_INPUTS.has((s as { type: string }).type));
+function asFarmSheet(v: unknown): FarmSheet | null {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  return {
+    price_per_person_kes: typeof o["price_per_person_kes"] === "number" ? (o["price_per_person_kes"] as number) : null,
+    capacity_per_tour: typeof o["capacity_per_tour"] === "number" ? (o["capacity_per_tour"] as number) : null,
+    days: Array.isArray(o["days"]) ? (o["days"] as FarmSheet["days"]) : null,
+    hours: typeof o["hours"] === "object" && o["hours"] !== null ? (o["hours"] as FarmSheet["hours"]) : null,
+    directions_sw: typeof o["directions_sw"] === "string" ? (o["directions_sw"] as string) : null,
+    inclusions_sw: Array.isArray(o["inclusions_sw"]) ? (o["inclusions_sw"] as string[]) : null,
+  };
+}
+
+const FIELD_THEME: Record<string, string> = { directions_sw: "directions", price_per_person_kes: "price", hours: "timing", inclusions_sw: "food" };
+
+function themeOfField(a: AppliedFactChange): string {
+  const field = a.drafts[0]?.field ?? "";
+  return FIELD_THEME[field] ?? field;
 }
 
 function findingStatus(t: ThemeSummary): "enough_evidence" | "not_enough_feedback" | "contradictory" {
@@ -89,7 +110,12 @@ class Session {
   addMessages(messages: unknown[]): void {
     const result = ingestMessages(messages, sha256, this.sources);
     for (const [id, s] of result.sources) {
-      const language = s.language ?? detectLanguage(s.text) ?? "und";
+      // Nat HO-012: a declared language is a claim, not proof. Detection runs on every source; when it
+      // contradicts the declaration (Kikuyu text declared "sw") the language is undetermined and the
+      // core asks a person. Agreement or silence from the detector leaves the declaration in place.
+      const detected = detectLanguage(s.text);
+      const disputed = s.language !== undefined && detected !== null && detected !== s.language.toLowerCase().split("-")[0] && (detected === "ki" || LANGUAGES.has(detected));
+      const language = disputed ? "und" : (s.language ?? detected ?? "und");
       this.sources.set(id, { ...s, language });
     }
     for (const d of result.duplicates) if (!this.duplicates.includes(d)) this.duplicates.push(d);
@@ -114,10 +140,16 @@ export function runFixture(input: Input): Record<string, unknown> {
   session.addMessages(Array.isArray(input.messages) ? input.messages : []);
   session.modelOutput = input.model_output;
 
-  // Steps 4 and 5: cards shown, owner speaks, new evidence may arrive in between.
+  // Steps 4 to 6: cards shown, owner speaks, new evidence may arrive in between, owner dictates and confirms a fact change.
   let shownCards: DecisionCard[] = [];
   const decisions: Array<{ theme: string; choice: string }> = [];
+  const choiceByTheme = new Map<string, Choice>();
   const choiceRefusals: Array<{ theme: string; reason: string }> = [];
+  const initialSheet = asFarmSheet(input.owner_facts);
+  let facts: FactRevision | null = initialSheet ? makeRevision(initialSheet, 1, "w1_setup", FIXTURE_NOW_MS, sha256) : null;
+  const factProposals = new Map<string, FactChangeProposal>();
+  const factRefusals: Array<{ theme: string; reason: string }> = [];
+  const applied: AppliedFactChange[] = [];
   for (const step of input.owner_inputs ?? []) {
     if (step.type === "show_cards") {
       shownCards = buildDecisionCards(session.analyze(), sha256);
@@ -132,8 +164,43 @@ export function runFixture(input: Input): Record<string, unknown> {
       }
       const current = buildDecisionCards(session.analyze(), sha256).find((c) => c.theme === step.card_theme) ?? null;
       const r = recordChoice({ shownCard: shown, currentCard: current, transcript: String(step.transcript ?? ""), asrUncertain: step.asr_uncertain === true });
-      if (r.ok) decisions.push({ theme: r.decision.theme, choice: r.decision.choice });
-      else choiceRefusals.push({ theme: shown.theme, reason: r.reason });
+      if (r.ok) {
+        decisions.push({ theme: r.decision.theme, choice: r.decision.choice });
+        choiceByTheme.set(r.decision.theme, r.decision.choice);
+      } else choiceRefusals.push({ theme: shown.theme, reason: r.reason });
+    } else if (step.type === "owner_dictates") {
+      const theme = String(step.card_theme);
+      if (!facts) {
+        factRefusals.push({ theme, reason: "no_farm_sheet" });
+        continue;
+      }
+      if (step.asr_uncertain === true) {
+        factRefusals.push({ theme, reason: "asr_uncertain" });
+        continue;
+      }
+      const p = proposeFactChange({ theme, choice: choiceByTheme.get(theme) ?? null, transcript: String(step.transcript ?? ""), current: facts }, sha256);
+      if (p.ok) factProposals.set(theme, p.proposal);
+      else factRefusals.push({ theme, reason: p.reason });
+    } else if (step.type === "owner_confirms_change") {
+      const theme = String(step.card_theme);
+      const proposal = factProposals.get(theme);
+      if (!proposal || !facts) {
+        factRefusals.push({ theme, reason: "nothing_proposed" });
+        continue;
+      }
+      const c = confirmFactChange({ proposal, transcript: String(step.transcript ?? ""), asrUncertain: step.asr_uncertain === true, current: facts, nowMs: FIXTURE_NOW_MS }, sha256);
+      if (c.ok) {
+        // One bundle: revision, approval and drafts are committed together by the host.
+        facts = c.applied.revision;
+        applied.push(c.applied);
+        factProposals.delete(theme);
+      } else factRefusals.push({ theme, reason: c.reason });
+    } else if (step.type === "facts_changed") {
+      const next = asFarmSheet(step.owner_facts);
+      if (next) facts = makeRevision(next, (facts?.revision ?? 0) + 1, String(step.source ?? "external"), FIXTURE_NOW_MS, sha256);
+    } else if (step.type === "crash_and_restart") {
+      // Durability is the host's transaction; the bundle above is all-or-nothing, so a restart finds the
+      // revision, its approval and its drafts together or none of them. Nothing is replayed.
     }
   }
 
@@ -182,11 +249,12 @@ export function runFixture(input: Input): Record<string, unknown> {
     cards: cards.map((c) => ({ theme: c.theme, text: c.text, quotes: c.quotes, choices: [...c.choices], prospective: c.prospective, card_digest: c.card_digest, text_review: c.text_review })),
     decisions,
     choice_refusals: choiceRefusals,
-    side_effects: { facts_changed: false, approvals_created: 0, outbox_entries: 0 },
-    // W3 step 6 (owner dictates a fact change -> fact revision -> listing proposals) is not built yet:
-    // reported as NOT COVERED, never as a pass (Nat DEV-029..037). When a fixture drives step 6, the
-    // side-effect counters it expects are part of that unbuilt step, so they are not claimed either.
-    not_implemented: step6Driven(input) ? ["fact_change_proposals", "facts_after", "listing_proposals", "side_effects"] : ["fact_change_proposals", "facts_after", "listing_proposals"],
+    fact_change_proposals: [...factProposals.values(), ...applied.map((a) => ({ theme: themeOfField(a), field: a.drafts[0]?.field, value: a.drafts[0]?.value }))].map((p) => ({ theme: p.theme, field: p.field, value: p.value })),
+    fact_change_refusals: factRefusals,
+    facts_after: facts ? facts.sheet : null,
+    listing_proposals: applied.flatMap((a) => a.drafts.map((d) => ({ channel: d.channel, field: d.field, value: d.value, published: d.published, draft_id: d.draft_id }))),
+    side_effects: { facts_changed: applied.length > 0, approvals_created: applied.length, outbox_entries: 0 },
+    not_implemented: facts ? [] : ["fact_change_proposals", "facts_after", "listing_proposals"],
     core_revision: process.env["SAUTI_CORE_REVISION"] ?? "unknown",
     harness_notes: ["language id for undeclared sources is harness-only (stopword sets); the product's detector replaces it"],
   };

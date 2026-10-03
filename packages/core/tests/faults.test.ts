@@ -14,7 +14,9 @@ import { envelopeDigest, sealEnvelope, type ActionEnvelope } from "../src/envelo
 import { buildDecisionCards, parseChoice, recordChoice } from "../src/decisions.js";
 import { countUniqueSources, summarizeThemes, summarizeThemesReport, validateEvidenceItem, type SourceText, type TaggedItem } from "../src/evidence.js";
 import { ingestMessages } from "../src/ingest.js";
+import { confirmFactChange, type FarmSheet, makeRevision, proposeFactChange } from "../src/facts.js";
 import { proposeFollowUp, unexplainedNumbers } from "../src/proposals.js";
+import { parseAmount, parseConfirmation, parseHours } from "../src/swahili.js";
 import { analyzeFeedback, parseModelOutput } from "../src/tagging.js";
 import { validateMoney } from "../src/money.js";
 import { applyReceipt, applyRevocation, beginDispatch, checkDispatch, decideRevocation, recordAcceptance, recordFailure, recoverAfterRestart, retry, transportLabel } from "../src/outbox.js";
@@ -205,17 +207,18 @@ describe("test 3: duplicate import does not inflate counts; bad citations fail",
     expect(twoTwo[0]).toMatchObject({ verdict: "conflicting", direction: "mixed" });
   });
 
-  it("DEV-004: a review cross-posted to two platforms is one comment; sources are still listed", () => {
+  it("DEV-004 / HO-001: a review cross-posted to two platforms is one comment even with case and spacing changes; different authors stay two", () => {
     const same = "Directions were confusing but the coffee was great.";
     const srcs = new Map([
-      ["google-1", mk("google-1", same)],
-      ["gyg-1", mk("gyg-1", same)],
+      ["google-1", { ...mk("google-1", same), author: "Vera U." }],
+      ["gyg-1", { ...mk("gyg-1", "DIRECTIONS were  confusing but the coffee was great."), author: "vera u." }],
       ["direct-1", mk("direct-1", "Confusing directions.")],
       ["direct-2", mk("direct-2", "The directions confused us.")],
+      ["other-1", { ...mk("other-1", same), author: "Ben A." }],
     ]);
-    const tagged = [cite(srcs, "google-1", "confusing", "negative"), cite(srcs, "gyg-1", "confusing", "negative"), cite(srcs, "direct-1", "Confusing", "negative"), cite(srcs, "direct-2", "confused", "negative")];
+    const tagged = [cite(srcs, "google-1", "confusing", "negative"), cite(srcs, "gyg-1", "confusing", "negative"), cite(srcs, "direct-1", "Confusing", "negative"), cite(srcs, "direct-2", "confused", "negative"), cite(srcs, "other-1", "confusing", "negative")];
     const [t] = summarizeThemes(tagged, srcs, sha256);
-    expect(t).toMatchObject({ comment_count: 3, source_count: 4, cross_posted: ["gyg-1"], verdict: "supported", direction: "negative" });
+    expect(t).toMatchObject({ comment_count: 4, source_count: 5, cross_posted: ["gyg-1"], verdict: "supported", direction: "negative" });
   });
 
   it("probe DEV-010: a sentiment or theme outside the catalogue is dropped and reported, never thrown or counted", () => {
@@ -397,6 +400,65 @@ describe("card to follow-up proposal: evidence carried, no invented number, exac
     // the recipient's own digits are an identifier, not a claim
     const phone = proposeFollowUp({ ...base, recipient: { channel: "sms", address: "+254700000001", language: "en" }, template: { ...template, preview_text: "Send to +254700000001: Thank you for visiting." } }, sha256);
     expect(phone.ok).toBe(true);
+  });
+});
+
+describe("W3 step 6: owner fact changes come only from Noor's words, apply only on her exact yes, and draft listings unpublished", () => {
+  const sheet: FarmSheet = {
+    price_per_person_kes: 2000,
+    capacity_per_tour: 10,
+    days: ["mon", "tue", "wed", "thu", "fri", "sat"],
+    hours: { start: "09:00:00", end: "15:00:00" },
+    directions_sw: "Kutoka soko la Othaya fuata barabara ya kanisa kilomita mbili",
+    inclusions_sw: ["kahawa", "chakula cha mchana"],
+  };
+  const rev1 = makeRevision(sheet, 1, "w1_voice", Date.parse(NOW), sha256);
+
+  it("Swahili amounts, times and yes/no are parsed by code", () => {
+    expect(parseAmount("Bei mpya ni shilingi elfu moja na mia tano kwa mtu")).toBe(1500);
+    expect(parseAmount("shilingi elfu mbili kwa mtu mmoja")).toBe(2000);
+    expect(parseAmount("elfu kumi na tano")).toBe(15000);
+    expect(parseAmount("laki moja na elfu hamsini")).toBe(150000);
+    expect(parseAmount("Ksh 2,000")).toBe(2000);
+    expect(parseAmount("Bei iwe nafuu kidogo")).toBeNull();
+    expect(parseHours("kuanzia saa tatu asubuhi mpaka saa tisa na nusu mchana")).toEqual({ start: { hour: 9, minute: 0 }, end: { hour: 15, minute: 30 } });
+    expect(parseHours("9:00 hadi 14.30")).toEqual({ start: { hour: 9, minute: 0 }, end: { hour: 14, minute: 30 } });
+    expect(parseHours("saa tatu asubuhi")).toBeNull();
+    expect(parseConfirmation("ndiyo")).toBe("yes");
+    expect(parseConfirmation("hapana, badilisha")).toBe("no");
+    expect(parseConfirmation("mmm")).toBeNull();
+    expect(parseConfirmation("1")).toBe("yes");
+  });
+
+  it("a try plus a readable dictation proposes exactly one field; no field or no value proposes nothing", () => {
+    const p = proposeFactChange({ theme: "price", choice: "try", transcript: "Bei mpya ni shilingi elfu moja na mia tano kwa mtu", current: rev1 }, sha256);
+    expect(p).toMatchObject({ ok: true, proposal: { theme: "price", field: "price_per_person_kes", value: 1500, from_revision: 1 } });
+    expect(proposeFactChange({ theme: "price", choice: "try", transcript: "Bei iwe nafuu kidogo", current: rev1 }, sha256)).toMatchObject({ ok: false, reason: "no_readable_value" });
+    expect(proposeFactChange({ theme: "coffee", choice: "try", transcript: "Kahawa zaidi", current: rev1 }, sha256)).toMatchObject({ ok: false, reason: "no_field_for_theme" });
+    expect(proposeFactChange({ theme: "price", choice: "reject", transcript: "elfu moja", current: rev1 }, sha256)).toMatchObject({ ok: false, reason: "no_try_decision" });
+    expect(proposeFactChange({ theme: "price", choice: null, transcript: "elfu moja", current: rev1 }, sha256)).toMatchObject({ ok: false, reason: "no_try_decision" });
+    const d = proposeFactChange({ theme: "directions", choice: "try", transcript: "Kutoka soko fuata barabara kisha geuka kushoto", current: rev1 }, sha256);
+    expect(d).toMatchObject({ ok: true, proposal: { field: "directions_sw", value: "Kutoka soko fuata barabara kisha geuka kushoto" } });
+    // the value in the proposal is Noor's, even when a review mentioned another number
+    expect(p.ok && p.proposal.value).toBe(1500);
+  });
+
+  it("only an explicit yes on the current revision applies; it writes revision, approval and unpublished drafts together", () => {
+    const p = proposeFactChange({ theme: "price", choice: "try", transcript: "shilingi elfu moja na mia tano", current: rev1 }, sha256);
+    if (!p.ok) throw new Error("fixture");
+    expect(confirmFactChange({ proposal: p.proposal, transcript: "mmm", current: rev1, nowMs: Date.parse(NOW) }, sha256)).toMatchObject({ ok: false, reason: "no_explicit_yes" });
+    expect(confirmFactChange({ proposal: p.proposal, transcript: "hapana", current: rev1, nowMs: Date.parse(NOW) }, sha256)).toMatchObject({ ok: false, reason: "declined" });
+    expect(confirmFactChange({ proposal: p.proposal, transcript: "ndiyo", asrUncertain: true, current: rev1, nowMs: Date.parse(NOW) }, sha256)).toMatchObject({ ok: false, reason: "asr_uncertain" });
+    const moved = makeRevision({ ...sheet, price_per_person_kes: 2500 }, 2, "w1_setup", Date.parse(NOW), sha256);
+    expect(confirmFactChange({ proposal: p.proposal, transcript: "ndiyo", current: moved, nowMs: Date.parse(NOW) }, sha256)).toMatchObject({ ok: false, reason: "facts_changed" });
+    const yes = confirmFactChange({ proposal: p.proposal, transcript: "ndiyo", current: rev1, nowMs: Date.parse(NOW) }, sha256);
+    expect(yes.ok).toBe(true);
+    if (!yes.ok) return;
+    expect(yes.applied.revision).toMatchObject({ revision: 2, source: "w3_step6", sheet: { ...sheet, price_per_person_kes: 1500 } });
+    expect(yes.applied.approval.proposal_digest).toBe(p.proposal.digest);
+    expect(yes.applied.drafts.map((d) => d.channel)).toEqual(["google_business", "getyourguide", "osm"]);
+    expect(yes.applied.drafts.every((d) => d.published === false && d.field === "price_per_person_kes" && d.value === 1500)).toBe(true);
+    expect(new Set(yes.applied.drafts.map((d) => d.draft_id)).size).toBe(3);
   });
 });
 

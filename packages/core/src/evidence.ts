@@ -24,6 +24,19 @@ export interface SourceText {
   content_hash: string;
   /** BCP 47 tag of the original, when known. Used for the supported-language gate. */
   language?: string;
+  /** Display name of the author when the platform gives one. Used only to fold cross-posts. */
+  author?: string;
+}
+
+/**
+ * Cross-post folding key (Nat HO-001): the same comment pasted into two platforms may differ in case,
+ * spacing or Unicode form. Fold on NFC + lower case + collapsed whitespace, and on the author when
+ * both sides name one; two different people writing the same short sentence stay two comments.
+ */
+export function commentFoldKey(source: SourceText): string {
+  const text = source.text.normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+  const author = (source.author ?? "").normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+  return `${author}|${text}`;
 }
 
 export type EvidenceReason = "unknown_source" | "hash_mismatch" | "span_out_of_range" | "span_not_on_char_boundary" | "quote_mismatch" | "unsupported_language";
@@ -101,7 +114,7 @@ export type ThemeDirection = "positive" | "negative" | "neutral" | "mixed" | nul
 
 export interface ThemeSummary {
   theme: string;
-  /** Distinct comments on this theme: unique valid source TEXTS (content hash). A review cross-posted to two platforms is one comment. The unit is comments, never visitors. */
+  /** Distinct comments on this theme after cross-post folding (same author when known, same text after NFC/case/space folding). The unit is comments, never visitors. */
   comment_count: number;
   /** Unique valid source ids, before cross-post folding. Shown next to comment_count when they differ. */
   source_count: number;
@@ -193,8 +206,11 @@ export function summarizeThemesReport(tagged: readonly TaggedItem[], sources: Re
     const report = validateEvidence(items.map((i) => i.evidence), sources, sha256, options);
     for (const r of report.rejected) (r.reason === "unsupported_language" ? unsupportedSources : invalidSources).add(r.item.source_id);
     const validIds = new Set(report.valid.map((e) => e.source_id));
-    // Fold cross-posts: two source ids with identical original text are one comment. Counted by content hash.
-    const commentKeyOf = (sourceId: string): string => sources.get(sourceId)?.content_hash ?? sourceId;
+    // Fold cross-posts: two source ids carrying the same comment are one comment. See commentFoldKey.
+    const commentKeyOf = (sourceId: string): string => {
+      const s = sources.get(sourceId);
+      return s ? commentFoldKey(s) : sourceId;
+    };
     const firstIdByKey = new Map<string, string>();
     const crossPosted: string[] = [];
     for (const id of [...validIds].sort()) {
