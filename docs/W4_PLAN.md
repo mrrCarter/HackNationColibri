@@ -61,7 +61,7 @@ Functions W4 calls from the shared core (`sauti/storage/states.py`, `sauti/workf
 - `approve(conn, proposal_id, content_hash) -> Proposal` (raises on hash mismatch or wrong state)
 - `queue(conn, proposal) -> OutboxItem` (idempotency_key = proposal id + content hash)
 
-**Fallback.** If the W2 core is not on main by 2026-10-03 23:30 UTC, W4 ships a minimal version of exactly these three functions and tables in its PR, with `test_policy.py` and `test_states.py` covering CLAUDE.md testing priorities 1 to 3, for W2/W5 to extend rather than re-invent. Announced in the room before doing so.
+**Coordination.** W5 (cosme-claude) has the same dependency and offered to own the shared core if W2 has nothing pushed (#47451). W4 builds against the three calls above with a fake core in its tests, and wires the real one the moment it is on a branch. W4 does not ship its own core unless the room asks for it: one core for W2, W4 and W5, not two.
 
 ## Files
 
