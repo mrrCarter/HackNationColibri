@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/xamalow/HackNationColibri/contracts/approval-record.schema.json",
+  "title": "Sauti approval record",
+  "description": "Noor's decision on one exact action envelope. Hash equality proves byte identity, not that a person saw it: a fresh, unrevoked, trusted-device owner session is required. Revision 1.0.0.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "approval_id",
+    "action_id",
+    "digest",
+    "fact_revision",
+    "decision",
+    "decided_at",
+    "owner_context"
+  ],
+  "properties": {
+    "schema": {
+      "const": "sauti.approval_record"
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "approval_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "action_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Digest of the envelope exactly as rendered to the owner. Must equal the stored envelope digest at decision time and again at send time."
+    },
+    "fact_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Current farm sheet version at decision time. Must equal the envelope's fact_revision."
+    },
+    "decision": {
+      "enum": [
+        "approved",
+        "rejected"
+      ]
+    },
+    "decided_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "owner_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner_id",
+        "device_id",
+        "unlock",
+        "session_id",
+        "authenticated_at"
+      ],
+      "properties": {
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "The tenant's registered owner. Distinct from tenant_id (the business)."
+        },
+        "device_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Must be in the tenant's trusted device list. A helper, or the daughter's unlocked phone without owner unlock, is not owner context."
+        },
+        "unlock": {
+          "enum": [
+            "pin",
+            "biometric"
+          ],
+          "description": "How the owner session was authenticated. Voice or text confirmation alone never authenticates; see confirmation."
+        },
+        "confirmation": {
+          "enum": [
+            "tap",
+            "voice",
+            "text",
+            "keypad"
+          ],
+          "description": "How the owner confirmed THIS action inside an authenticated session. Informational; the session is what carries authority."
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Local owner session. Checked for freshness (max age) and against the revoked-session list at decision time."
+        },
+        "authenticated_at": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$",
+          "description": "When the owner session was authenticated. decided_at - authenticated_at must be within the tenant's max session age."
+        }
+      }
+    }
+  }
+}

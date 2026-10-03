@@ -1,0 +1,575 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/xamalow/HackNationColibri/contracts/action-envelope.schema.json",
+  "title": "Sauti action envelope",
+  "description": "One exact action Noor may approve. Everything the owner sees and everything a transport will do is bound into the digest. Changing any field voids the approval. Schema validation comes BEFORE hashing; the allOf block binds kind to payload type and recipient channel. Revision 1.0.0, see contracts/README.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "action_id",
+    "tenant_id",
+    "kind",
+    "created_at",
+    "valid_until",
+    "fact_revision",
+    "recipient",
+    "payload",
+    "evidence",
+    "preview",
+    "authority",
+    "digest"
+  ],
+  "properties": {
+    "schema": {
+      "const": "sauti.action_envelope"
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "action_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "kind": {
+      "enum": [
+        "send_message",
+        "book_slot",
+        "record_payment",
+        "publish_listing",
+        "reply_to_review"
+      ],
+      "description": "send_message covers replies too: set payload.in_reply_to. reply_to_review targets a listing's review."
+    },
+    "created_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "valid_until": {
+      "$ref": "#/$defs/timestamp",
+      "description": "Approval and queueing are refused at or after this instant. Expiry is evaluated against a monotonic clock, never only the wall clock."
+    },
+    "fact_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "farm_sheet_versions.version the action was built from. Bounded to 2^53-1 so every runtime represents it exactly. A newer farm sheet voids approval."
+    },
+    "recipient": {
+      "$ref": "#/$defs/recipient"
+    },
+    "payload": {
+      "description": "Kind-specific content. Money is integer minor units with ISO code and exponent; no floats anywhere in an envelope.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/payload_message"
+        },
+        {
+          "$ref": "#/$defs/payload_book_slot"
+        },
+        {
+          "$ref": "#/$defs/payload_record_payment"
+        },
+        {
+          "$ref": "#/$defs/payload_publish_listing"
+        }
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/evidence_item"
+      },
+      "description": "Exact source spans the proposal rests on. Empty is allowed for owner-dictated actions (record_payment) and must be shown as such."
+    },
+    "preview": {
+      "$ref": "#/$defs/preview"
+    },
+    "authority": {
+      "$ref": "#/$defs/authority"
+    },
+    "digest": {
+      "$ref": "#/$defs/sha256",
+      "description": "sha256 over the domain prefix 'sauti.action_envelope.v1' + 0x00 + RFC 8785 canonical JSON of this object without the digest member."
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$",
+      "description": "RFC 3339, UTC, second precision, literal Z. The pattern bounds each field; calendar validity (no 2026-02-30) and valid_until > created_at are enforced by code before hashing, in every implementation."
+    },
+    "bcp47": {
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$"
+    },
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "amount_minor",
+        "currency",
+        "exponent"
+      ],
+      "properties": {
+        "amount_minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000000,
+          "description": "Integer in the currency's minor units. KES: cents, exponent 2, so 2000 shillings = 200000."
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$",
+          "description": "ISO 4217 code."
+        },
+        "exponent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4,
+          "description": "Minor-unit exponent for this currency (KES 2, JPY 0, KWD 3). Code validates it against the ISO table; a mismatch is a validation error, not a rounding."
+        }
+      }
+    },
+    "recipient": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "channel",
+        "address",
+        "language"
+      ],
+      "properties": {
+        "channel": {
+          "enum": [
+            "sms",
+            "whatsapp",
+            "simulated",
+            "google_business",
+            "getyourguide",
+            "osm",
+            "local"
+          ],
+          "description": "'local' = the owner's own records, used by book_slot and record_payment. 'simulated' must be shown as simulated, never as sent."
+        },
+        "address": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "E.164 number, chat id, listing id, or 'owner' for local."
+        },
+        "language": {
+          "$ref": "#/$defs/bcp47"
+        }
+      }
+    },
+    "evidence_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "content_hash",
+        "span",
+        "quote"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "content_hash": {
+          "$ref": "#/$defs/sha256",
+          "description": "Domain-separated hash of the immutable original text: sha256('sauti.source_text.v1' || 0x00 || utf8(text)), lowercase hex. Not a plain sha256 of the text."
+        },
+        "span": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "start",
+            "end"
+          ],
+          "properties": {
+            "start": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "end": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "description": "UTF-8 byte offsets into the original text, start inclusive, end exclusive."
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "Must equal the exact UTF-8 slice; validated by code."
+        }
+      }
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "render_locale"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "description": "Exactly what the owner was shown or read. A different render voids approval."
+        },
+        "render_locale": {
+          "$ref": "#/$defs/bcp47"
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "owner_context_required"
+      ],
+      "properties": {
+        "level": {
+          "enum": [
+            "owner"
+          ]
+        },
+        "owner_context_required": {
+          "const": true
+        }
+      }
+    },
+    "payload_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "body",
+        "body_language"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "message"
+          ]
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "description": "Exact text the transport sends. Translating after approval is a content change and needs re-approval."
+        },
+        "body_language": {
+          "$ref": "#/$defs/bcp47"
+        },
+        "in_reply_to": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Source id of the message or review being answered. Present = this is a reply."
+        },
+        "booking_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "template_id": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "payload_book_slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "booking_id",
+        "slot_date",
+        "slot_start",
+        "slot_end",
+        "party_size",
+        "price"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "book_slot"
+          ]
+        },
+        "booking_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "slot_date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "slot_start": {
+          "type": "string",
+          "pattern": "^[0-9]{2}:[0-9]{2}$"
+        },
+        "slot_end": {
+          "type": "string",
+          "pattern": "^[0-9]{2}:[0-9]{2}$"
+        },
+        "party_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "price": {
+          "$ref": "#/$defs/money"
+        }
+      }
+    },
+    "payload_record_payment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "booking_id",
+        "money",
+        "method",
+        "reported_by"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "record_payment"
+          ]
+        },
+        "booking_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "money": {
+          "$ref": "#/$defs/money"
+        },
+        "method": {
+          "enum": [
+            "mpesa",
+            "cash",
+            "bank",
+            "unknown"
+          ]
+        },
+        "reported_by": {
+          "const": "owner",
+          "description": "Deposits are owner-confirmed records only. The system never moves or verifies money."
+        }
+      }
+    },
+    "payload_publish_listing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "listing",
+        "fields"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "publish_listing"
+          ]
+        },
+        "listing": {
+          "enum": [
+            "google_business",
+            "getyourguide",
+            "osm"
+          ]
+        },
+        "fields": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "boolean",
+              "null"
+            ]
+          },
+          "maxProperties": 40
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "send_message"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "type": {
+                "const": "message"
+              }
+            }
+          },
+          "recipient": {
+            "properties": {
+              "channel": {
+                "enum": [
+                  "sms",
+                  "whatsapp",
+                  "simulated"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "reply_to_review"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "type": {
+                "const": "message"
+              }
+            }
+          },
+          "recipient": {
+            "properties": {
+              "channel": {
+                "enum": [
+                  "google_business",
+                  "getyourguide",
+                  "simulated"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "book_slot"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "type": {
+                "const": "book_slot"
+              }
+            }
+          },
+          "recipient": {
+            "properties": {
+              "channel": {
+                "enum": [
+                  "local"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "record_payment"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "type": {
+                "const": "record_payment"
+              }
+            }
+          },
+          "recipient": {
+            "properties": {
+              "channel": {
+                "enum": [
+                  "local"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "publish_listing"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "type": {
+                "const": "publish_listing"
+              }
+            }
+          },
+          "recipient": {
+            "properties": {
+              "channel": {
+                "enum": [
+                  "google_business",
+                  "getyourguide",
+                  "osm",
+                  "simulated"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
