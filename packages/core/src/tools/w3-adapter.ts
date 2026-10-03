@@ -271,8 +271,28 @@ async function main(): Promise<void> {
     process.stdout.write(JSON.stringify({ error: "stdin is not JSON" }) + "\n");
     return;
   }
-  const outcome = runFixture(parsed.input ?? {});
-  process.stdout.write(JSON.stringify({ fixture_id: parsed.fixture_id ?? null, ...outcome }) + "\n");
+  const input = parsed.input ?? {};
+  // Optional: replace the fixture's (adversarial, simulated) model output with a real tagger's output,
+  // e.g. SAUTI_TAGGER_MODULE=contrib/max/tagger/tag_feedback.mjs. The module must export
+  // tagFeedback(messages: {id, text, lang?}[]) -> {status, labels}. The core still validates every label.
+  const taggerPath = process.env["SAUTI_TAGGER_MODULE"];
+  if (taggerPath) {
+    const { pathToFileURL } = await import("node:url");
+    const { resolve } = await import("node:path");
+    const mod = (await import(pathToFileURL(resolve(taggerPath)).href)) as { tagFeedback?: (messages: unknown[]) => unknown };
+    if (typeof mod.tagFeedback !== "function") throw new Error(`${taggerPath} does not export tagFeedback`);
+    const tag = mod.tagFeedback;
+    const asTaggerInput = (messages: unknown[]): unknown[] => messages.filter((m) => typeof m === "object" && m !== null).map((m) => ({ id: (m as { id?: unknown }).id, text: (m as { text?: unknown }).text, lang: (m as { lang?: unknown }).lang }));
+    input.model_output = tag(asTaggerInput(Array.isArray(input.messages) ? input.messages : []));
+    for (const step of input.owner_inputs ?? []) {
+      if (step.type === "new_messages") {
+        const out = tag(asTaggerInput(Array.isArray(step.messages) ? step.messages : [])) as { labels?: unknown[] };
+        step.labels = Array.isArray(out?.labels) ? out.labels : [];
+      }
+    }
+  }
+  const outcome = runFixture(input);
+  process.stdout.write(JSON.stringify({ fixture_id: parsed.fixture_id ?? null, tagger: taggerPath ?? "fixture model_output", ...outcome }) + "\n");
 }
 
 const invokedDirectly = typeof process !== "undefined" && Array.isArray(process.argv) && /w3-adapter\.[cm]?js$/.test(process.argv[1] ?? "");

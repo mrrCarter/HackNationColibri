@@ -17,6 +17,7 @@ import { formatTimestamp } from "./clock.js";
 import { type ActionEnvelope, type Recipient, sealEnvelope } from "./envelope.js";
 import type { FactRevision, FarmSheet, Weekday } from "./facts.js";
 import type { Money } from "./money.js";
+import { unexplainedNumbers } from "./proposals.js";
 
 export interface BookingRequest {
   request_id: string;
@@ -166,6 +167,64 @@ export function confirmBooking(booking: Booking, approvedEnvelope: ActionEnvelop
   const [outcome] = reconcileSlot({ slot_id: booking.slot_id, capacity }, already, [req]);
   if (!outcome || outcome.state !== "confirmed") return { ok: false, reason: "no_capacity", detail: outcome?.reason ?? "no outcome" };
   return { ok: true, booking: { ...booking, state: "confirmed" } };
+}
+
+export interface BookingMessageTemplate {
+  template_id: string;
+  body: string;
+  body_language: string;
+  preview_text: string;
+  render_locale: string;
+}
+
+export type BookingMessageResult =
+  | { ok: true; envelope: ActionEnvelope }
+  | { ok: false; reason: "not_confirmed" | "invented_number" | "invalid_envelope"; detail: string; errors?: string[] };
+
+/**
+ * The confirmation (or day-before "still coming?") message to the visitor: a separate
+ * send_message action with its own approval. The template may contain only numbers that
+ * the booking itself establishes (date, time, party size, price, the visitor's address).
+ */
+export function proposeBookingMessage(
+  input: { booking: Booking; template: BookingMessageTemplate; tenant_id: string; action_id: string; fact_revision: number; created_at_ms: number; valid_for_ms: number; owner_fact_numbers?: readonly string[] },
+  sha256: Sha256,
+): BookingMessageResult {
+  const b = input.booking;
+  if (b.state !== "confirmed") return { ok: false, reason: "not_confirmed", detail: `booking is ${b.state}; messages go to confirmed visitors only` };
+  const allowed = new Set<string>([
+    b.request.date,
+    ...b.request.date.split("-"),
+    b.slot_start,
+    b.slot_end,
+    String(b.request.party_size),
+    String(b.price.amount_minor / 10 ** b.price.exponent),
+    String(b.price.amount_minor),
+    ...(input.owner_fact_numbers ?? []),
+  ]);
+  for (const n of b.request.contact.address.match(/\d+(?:[.,:]\d+)*/g) ?? []) allowed.add(n);
+  const invented = [...unexplainedNumbers(input.template.body, allowed), ...unexplainedNumbers(input.template.preview_text, allowed)];
+  if (invented.length > 0) return { ok: false, reason: "invented_number", detail: `numbers the booking does not establish: ${[...new Set(invented)].join(", ")}` };
+  const sealed = sealEnvelope(
+    {
+      schema: "sauti.action_envelope",
+      schema_version: "1.0.0",
+      action_id: input.action_id,
+      tenant_id: input.tenant_id,
+      kind: "send_message",
+      created_at: formatTimestamp(input.created_at_ms),
+      valid_until: formatTimestamp(input.created_at_ms + input.valid_for_ms),
+      fact_revision: input.fact_revision,
+      recipient: b.request.contact,
+      payload: { type: "message", body: input.template.body, body_language: input.template.body_language, booking_id: b.booking_id, template_id: input.template.template_id },
+      evidence: [],
+      preview: { text: input.template.preview_text, render_locale: input.template.render_locale },
+      authority: { level: "owner", owner_context_required: true },
+    },
+    sha256,
+  );
+  if (!sealed.ok) return { ok: false, reason: "invalid_envelope", detail: "the booking message does not satisfy the contract", errors: sealed.errors };
+  return { ok: true, envelope: sealed.value };
 }
 
 /** Owner record only: arrived or did not show. Nothing is sent, no fact changes. */

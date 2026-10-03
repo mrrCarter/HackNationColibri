@@ -14,7 +14,7 @@ import { envelopeDigest, sealEnvelope, type ActionEnvelope } from "../src/envelo
 import { buildDecisionCards, parseChoice, recordChoice } from "../src/decisions.js";
 import { countUniqueSources, summarizeThemes, summarizeThemesReport, validateEvidenceItem, type SourceText, type TaggedItem } from "../src/evidence.js";
 import { ingestMessages } from "../src/ingest.js";
-import { type Booking, type BookingRequest, checkCapacity, confirmBooking, proposeBooking, recordArrival } from "../src/bookings.js";
+import { type Booking, type BookingRequest, checkCapacity, confirmBooking, proposeBooking, proposeBookingMessage, recordArrival } from "../src/bookings.js";
 import { confirmFactChange, type FarmSheet, makeRevision, proposeFactChange, validateFarmSheet } from "../src/facts.js";
 import { proposeFollowUp, unexplainedNumbers } from "../src/proposals.js";
 import { parseAmount, parseConfirmation, parseHours } from "../src/swahili.js";
@@ -515,6 +515,23 @@ describe("v1 scope: farm setup validation, booking proposals on the authoritativ
     expect(other.ok).toBe(true);
     if (other.ok) expect(confirmBooking(other.booking, other.envelope, sheet, [nine, (confirmed as { ok: true; booking: Booking }).booking], true, NOW)).toMatchObject({ ok: false, reason: "no_capacity" });
     expect(proposeBooking({ ...base, request: { ...request, date: "2026-10-11" } }, sha256)).toMatchObject({ ok: false, reason: "closed_day" });
+  });
+
+  it("the confirmation message is its own send_message action and may only carry the booking's numbers", () => {
+    const p = proposeBooking(base, sha256);
+    if (!p.ok) throw new Error("fixture");
+    const c = confirmBooking(p.booking, p.envelope, sheet, [], true, NOW);
+    if (!c.ok) throw new Error("fixture");
+    const tpl = { template_id: "booking_confirmed", body: "Karibu Thomas! 2026-10-10 saa 09:00, watu 2, KES 4000. Tutaonana.", body_language: "sw", preview_text: "Tuma kwa SIMULATED:guest-001: Karibu Thomas! 2026-10-10 saa 09:00, watu 2, KES 4000.", render_locale: "sw-KE" };
+    const common = { tenant_id: "demo-farm-001", action_id: "7a7a7a7a-5678-4def-9abc-0123456789ab", fact_revision: 1, created_at_ms: Date.parse(NOW), valid_for_ms: 86_400_000 };
+    expect(proposeBookingMessage({ booking: p.booking, template: tpl, ...common }, sha256)).toMatchObject({ ok: false, reason: "not_confirmed" });
+    const m = proposeBookingMessage({ booking: c.booking, template: tpl, ...common }, sha256);
+    expect(m.ok).toBe(true);
+    if (m.ok) {
+      expect(m.envelope).toMatchObject({ kind: "send_message", recipient: { channel: "simulated", address: "SIMULATED:guest-001" }, payload: { booking_id: "b-1", template_id: "booking_confirmed" } });
+      expect(decideApproval(approveArgs(m.envelope)).ok).toBe(true);
+    }
+    expect(proposeBookingMessage({ booking: c.booking, template: { ...tpl, body: "Karibu! Lipa KES 5000 mapema." }, ...common }, sha256)).toMatchObject({ ok: false, reason: "invented_number" });
   });
 
   it("arrival is an owner record on a confirmed booking only; nothing is sent", () => {
