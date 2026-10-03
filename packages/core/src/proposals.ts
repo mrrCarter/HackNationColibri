@@ -77,7 +77,11 @@ export function proposeFollowUp(input: FollowUpInput, sha256: Sha256): FollowUpR
 
   // Legitimate numbers: owner facts, the card's count, anything inside the quoted comments, and the
   // digits of the recipient address itself (a phone number is an identifier, not a claim).
-  const allowed = new Set<string>([...input.owner_fact_numbers, String(card.comment_count), ...numbersIn(input.recipient.address)]);
+  const allowed = new Set<string>([String(card.comment_count), ...numbersIn(input.recipient.address)]);
+  for (const f of input.owner_fact_numbers) {
+    allowed.add(f);
+    for (const n of numbersIn(f)) allowed.add(n); // "elfu mbili" legitimises both words
+  }
   for (const q of card.quotes) for (const n of numbersIn(q.quote)) allowed.add(n);
   const invented = unexplainedNumbers(template.body, allowed).concat(unexplainedNumbers(template.preview_text, allowed));
   if (invented.length > 0) return { ok: false, reason: "invented_number", detail: `numbers with no source in facts, counts or quotes: ${[...new Set(invented)].join(", ")}` };
