@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { approveExact, decideApproval, decideRejection, idempotencyKey, providerKey, revokeExact, type ApprovalRecord, type OutboxRow, type StoredAction } from "../src/approval.js";
 import { reconcileSlot, validateAppointment } from "../src/calendar.js";
 import { sourceTextHash } from "../src/canon.js";
-import { ClockStateError, formatTimestamp, observeClock } from "../src/clock.js";
+import { ClockStateError, formatTimestamp, MAX_TIMESTAMP_MS, observeClock } from "../src/clock.js";
 import { sealEnvelope, type ActionEnvelope } from "../src/envelope.js";
 import { buildDecisionCards, parseChoice, recordChoice } from "../src/decisions.js";
 import { countUniqueSources, summarizeThemes, summarizeThemesReport, validateEvidenceItem, type SourceText, type TaggedItem } from "../src/evidence.js";
@@ -595,11 +595,20 @@ describe("test 8: clock rollback, expiry and revocation cannot extend authority"
     expect(checkDispatch(dispatchArgs(a, { clock: rolledBack })).ok).toBe(false);
   });
 
-  it("probe: corrupt clock state fails closed instead of producing NaN authority", () => {
+  it("probe: corrupt or out-of-domain clock state fails closed instead of producing NaN authority", () => {
     expect(() => observeClock({ highWaterMs: Number.NaN }, Date.parse(NOW))).toThrow(ClockStateError);
     expect(() => observeClock({ highWaterMs: -1 }, Date.parse(NOW))).toThrow(ClockStateError);
     expect(() => observeClock({ highWaterMs: 0 }, Number.NaN)).toThrow(ClockStateError);
     expect(() => formatTimestamp(Number.NaN)).toThrow(ClockStateError);
+    // finite but absurd: Number.MAX_VALUE, beyond year 9999, overflowing elapsed time
+    expect(() => observeClock({ highWaterMs: Number.MAX_VALUE }, Date.parse(NOW))).toThrow(ClockStateError);
+    expect(() => observeClock({ highWaterMs: 0 }, Number.MAX_VALUE)).toThrow(ClockStateError);
+    expect(() => observeClock({ highWaterMs: MAX_TIMESTAMP_MS, monotonicAtHighWaterMs: 0 }, Date.parse(NOW), 1)).toThrow(ClockStateError);
+    expect(() => observeClock({ highWaterMs: Date.parse(NOW), monotonicAtHighWaterMs: 0 }, Date.parse(NOW), Number.MAX_SAFE_INTEGER)).toThrow(ClockStateError);
+    expect(() => formatTimestamp(Number.MAX_VALUE)).toThrow(ClockStateError);
+    expect(() => formatTimestamp(MAX_TIMESTAMP_MS + 1000)).toThrow(ClockStateError);
+    expect(formatTimestamp(MAX_TIMESTAMP_MS)).toBe("9999-12-31T23:59:59Z");
+    expect(formatTimestamp(0)).toBe("1970-01-01T00:00:00Z");
   });
 
   it("probe: ANY rollback is suspect, so repeated small resets cannot keep a near-expiry action alive", () => {

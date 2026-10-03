@@ -23,9 +23,9 @@ npx vitest run
 ## Flow
 
 ```ts
-import { sealEnvelope, verifyEnvelope, approveExact, observeClock, checkDispatch,
-         beginDispatch, recordAcceptance, recordFailure, applyReceipt, requestCancel,
-         validateEvidence, summarizeThemes } from "@sauti/core";
+import { sealEnvelope, envelopeDigest, approveExact, revokeExact, observeClock, checkDispatch,
+         beginDispatch, recordAcceptance, recordFailure, recoverAfterRestart, applyReceipt,
+         ingestMessages, analyzeFeedback, buildDecisionCards, recordChoice } from "@sauti/core";
 
 // 1. Build a proposal. Code fills every field; the model only suggested spans and a template.
 const sealed = sealEnvelope(bodyWithoutDigest, sha256);         // validates, then sets digest
@@ -58,11 +58,17 @@ const out = applyReceipt(a, receipt, seenProviderEventIds);     // pure; duplica
 persistTogether(out.action, out.seen);                          // action and seen-set in ONE transaction
 ```
 
-## Evidence
+## Feedback to decision (W3 steps 1 to 5)
 
 ```ts
-const report = validateEvidence(items, sources, sha256);        // exact UTF-8 byte spans, hash of the immutable original
-const themes = summarizeThemes(tagged, sources, sha256);        // unique COMMENT counts; <3 insufficient; conflicting; one dissent named
+const stored = ingestMessages(incoming, sha256, existingSources);          // immutable originals; (source, external_id) duplicates reported
+// language id (a separate step) writes SourceText.language; "und"/"unsure" means ask a person
+const analysis = analyzeFeedback(modelOutput, sources, sha256, {           // model output read as DATA
+  allowedThemes: CATALOGUE, supportedLanguages: new Set(["sw", "en", "de", "fr"]) });
+// analysis.themes: unique COMMENT counts (cross-posts folded), supporting side >= 3, dissent named, conflicting -> ask
+// analysis.ask_a_person: structured_output_failure / unsupported_language / contradictory_reviews / evidence_invalid
+const cards = buildDecisionCards(analysis, sha256);                        // only with enough evidence; digest-bound to the evidence set
+const choice = recordChoice({ shownCard, currentCard, transcript, asrUncertain }); // explicit try/reject/ask_someone only; stale card refused
 ```
 
 Text inside a source is data. Nothing in this package reads instructions from it.
@@ -79,8 +85,12 @@ Text inside a source is data. Nothing in this package reads instructions from it
 | `clock.ts` | monotonic high-water clock, strict RFC 3339 timestamps, expiry |
 | `approval.ts` | `decideApproval` (pure), `approveExact` (transactional), rejection, idempotency key |
 | `outbox.ts` | dispatch re-check, sending / sent / failed / send_unknown, receipts, cancel after acceptance, truthful labels |
-| `evidence.ts` | span validation, unique counts, theme verdicts |
+| `evidence.ts` | span validation, unique comment counts with cross-post folding, theme verdicts, ask-a-person |
+| `tagging.ts` | the model's output read as data: label parsing, structured-output failure |
+| `ingest.ts` | immutable sources, duplicate detection by (source, external_id) |
+| `decisions.ts` | decision cards bound to their evidence, the owner's explicit choice |
 | `calendar.ts` | slot reconciliation (at most the remaining capacity, tentative offline requests), absolute appointments |
+| `tools/w3-adapter.ts` | Node-only harness for Nat's fixtures; not exported by the package |
 
 ## Not in this package, on purpose
 

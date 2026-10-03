@@ -13,7 +13,7 @@
 
 import { APPROVAL_DOMAIN, digest, type Sha256 } from "./canon.js";
 import { type ClockReading, formatTimestamp, isExpired, parseTimestamp } from "./clock.js";
-import { type ActionEnvelope, envelopeDigest, verifyEnvelope } from "./envelope.js";
+import { type ActionEnvelope, verifyEnvelope } from "./envelope.js";
 import { type BusinessState, type TransportState } from "./states.js";
 import { utf8Encode } from "./utf8.js";
 

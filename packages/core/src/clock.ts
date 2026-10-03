@@ -32,8 +32,17 @@ export class ClockStateError extends RangeError {
   override readonly name = "ClockStateError";
 }
 
+/** The contract's timestamps have four-digit years: 0000-01-01T00:00:00Z .. 9999-12-31T23:59:59Z. */
+export const MAX_TIMESTAMP_MS = Date.UTC(9999, 11, 31, 23, 59, 59);
+
+/** A usable instant: finite, not before the epoch, inside the four-digit-year domain. */
+function inDomain(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= MAX_TIMESTAMP_MS;
+}
+
+/** Monotonic counters are not instants: finite and non-negative is enough, but huge values must not overflow sums. */
 function finiteNonNegative(v: unknown): v is number {
-  return typeof v === "number" && Number.isFinite(v) && v >= 0;
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= Number.MAX_SAFE_INTEGER;
 }
 
 /**
@@ -41,14 +50,14 @@ function finiteNonNegative(v: unknown): v is number {
  * it must come from the same source and never decrease.
  */
 export function observeClock(state: ClockState, wallMs: number, monotonicMs?: number): ClockReading {
-  if (typeof state !== "object" || state === null || !finiteNonNegative(state.highWaterMs)) {
-    throw new ClockStateError("persisted clock state is not a finite non-negative highWaterMs; refusing to decide authority");
+  if (typeof state !== "object" || state === null || !inDomain(state.highWaterMs)) {
+    throw new ClockStateError("persisted highWaterMs is not an instant inside the four-digit-year domain; refusing to decide authority");
   }
   if (state.monotonicAtHighWaterMs !== undefined && !finiteNonNegative(state.monotonicAtHighWaterMs)) {
-    throw new ClockStateError("persisted monotonicAtHighWaterMs is not a finite non-negative number");
+    throw new ClockStateError("persisted monotonicAtHighWaterMs is not a finite non-negative safe number");
   }
-  if (!finiteNonNegative(wallMs)) throw new ClockStateError("wall clock reading is not a finite non-negative number");
-  if (monotonicMs !== undefined && !finiteNonNegative(monotonicMs)) throw new ClockStateError("monotonic reading is not a finite non-negative number");
+  if (!inDomain(wallMs)) throw new ClockStateError("wall clock reading is not an instant inside the four-digit-year domain");
+  if (monotonicMs !== undefined && !finiteNonNegative(monotonicMs)) throw new ClockStateError("monotonic reading is not a finite non-negative safe number");
 
   let effectiveMs: number;
   let suspect: boolean;
@@ -61,6 +70,8 @@ export function observeClock(state: ClockState, wallMs: number, monotonicMs?: nu
     effectiveMs = Math.max(wallMs, state.highWaterMs);
     suspect = wallMs < state.highWaterMs; // any rollback, no tolerance
   }
+  // A computed instant outside the domain (overflow, absurd elapsed time) is corruption, not a far future.
+  if (!inDomain(effectiveMs)) throw new ClockStateError("computed effective time left the four-digit-year domain; refusing to decide authority");
   const next: ClockState = { highWaterMs: effectiveMs };
   if (monotonicMs !== undefined) next.monotonicAtHighWaterMs = monotonicMs;
   return { state: next, effectiveMs, suspect };
@@ -81,8 +92,9 @@ export function parseTimestamp(text: string): number | null {
 }
 
 export function formatTimestamp(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) throw new ClockStateError("cannot format a non-finite time");
+  if (!inDomain(ms)) throw new ClockStateError("cannot format a time outside the four-digit-year domain");
   const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) throw new ClockStateError("cannot format an invalid date");
   const p = (n: number, w = 2): string => String(n).padStart(w, "0");
   return `${p(d.getUTCFullYear(), 4)}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}Z`;
 }
