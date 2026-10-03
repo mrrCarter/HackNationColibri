@@ -67,6 +67,12 @@ interface Input {
   owner_inputs?: OwnerInput[];
 }
 
+const STEP6_INPUTS = new Set(["owner_dictates", "owner_confirms_change", "facts_changed", "crash_and_restart"]);
+
+function step6Driven(input: Input): boolean {
+  return (input.owner_inputs ?? []).some((s) => STEP6_INPUTS.has((s as { type: string }).type));
+}
+
 function findingStatus(t: ThemeSummary): "enough_evidence" | "not_enough_feedback" | "contradictory" {
   if (t.verdict === "conflicting") return "contradictory";
   if (t.verdict === "supported" || t.verdict === "supported_with_dissent") return "enough_evidence";
@@ -177,6 +183,10 @@ export function runFixture(input: Input): Record<string, unknown> {
     decisions,
     choice_refusals: choiceRefusals,
     side_effects: { facts_changed: false, approvals_created: 0, outbox_entries: 0 },
+    // W3 step 6 (owner dictates a fact change -> fact revision -> listing proposals) is not built yet:
+    // reported as NOT COVERED, never as a pass (Nat DEV-029..037). When a fixture drives step 6, the
+    // side-effect counters it expects are part of that unbuilt step, so they are not claimed either.
+    not_implemented: step6Driven(input) ? ["fact_change_proposals", "facts_after", "listing_proposals", "side_effects"] : ["fact_change_proposals", "facts_after", "listing_proposals"],
     core_revision: process.env["SAUTI_CORE_REVISION"] ?? "unknown",
     harness_notes: ["language id for undeclared sources is harness-only (stopword sets); the product's detector replaces it"],
   };
