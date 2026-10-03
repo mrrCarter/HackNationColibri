@@ -90,7 +90,27 @@ Text inside a source is data. Nothing in this package reads instructions from it
 | `ingest.ts` | immutable sources, duplicate detection by (source, external_id) |
 | `decisions.ts` | decision cards bound to their evidence, the owner's explicit choice |
 | `calendar.ts` | slot reconciliation (at most the remaining capacity, tentative offline requests), absolute appointments |
-| `tools/w3-adapter.ts` | Node-only harness for Nat's fixtures; not exported by the package |
+| `proposals.ts` | from a decision card to one exact follow-up envelope; refuses numbers with no source in facts, counts, quotes or the recipient address |
+| `swahili.ts` | amounts, clock times and yes/no parsed by code (reduced port of the Python W1 reference) |
+| `facts.ts` | farm sheet revisions, `validateFarmSheet` for the setup screen, W3 step 6 fact changes (dictated value parsed by code, applied only on an explicit yes on the same revision, listing drafts never published) |
+| `bookings.ts` | capacity check from the farm sheet and confirmed seats, one exact `book_slot` proposal, confirmation on the authoritative calendar, visitor message, arrival record |
+| `tools/w3-adapter.ts` | Node-only harness for Nat's fixtures (`SAUTI_TAGGER_MODULE` swaps in a real tagger); not exported by the package |
+
+## Bookings and farm setup (v1 scope, 2026-10-03)
+
+```ts
+const sheet = validateFarmSheet(formValues);                      // code-validated; empty fields stay null
+const revision = makeRevision(sheet.sheet, previous.revision + 1, "shamba_screen", nowMs, sha256);
+
+const check = checkCapacity(revision.sheet, confirmedBookings, request);   // missing_fact / closed_day / no_capacity -> ask a person
+const proposal = proposeBooking({ request, facts: revision, confirmed, tenant_id, action_id, booking_id, created_at_ms, valid_for_ms, preview_text, render_locale }, sha256);
+// Noor approves proposal.envelope through approveExact, then:
+const confirmed = confirmBooking(proposal.booking, approvedEnvelope, revision.sheet, confirmedBookings, isAuthoritativeDevice, nowIso);
+const reply = proposeBookingMessage({ booking: confirmed.booking, template, tenant_id, action_id: uuid(), fact_revision: revision.revision, created_at_ms, valid_for_ms }, sha256); // its own approval
+const arrived = recordArrival(confirmed.booking, "arrived");       // owner record, nothing sent
+```
+
+Owner unlock for all of this is the Sauti PIN session the host establishes (Carter, 2026-10-03 23:48 UTC); the core sees `unlock: "pin"` and refuses anything else.
 
 ## Not in this package, on purpose
 
