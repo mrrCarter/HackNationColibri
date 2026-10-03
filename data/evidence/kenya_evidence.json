@@ -1,0 +1,906 @@
+{
+  "retrieved_at": "2026-10-03T22:02:32.693912+00:00",
+  "wdi_kenya": {
+    "ST_INT_ARVL": {
+      "label": "International tourism, number of arrivals",
+      "series": [
+        {
+          "year": "1995",
+          "value": "974000"
+        },
+        {
+          "year": "1996",
+          "value": "1003000"
+        },
+        {
+          "year": "1997",
+          "value": "1001000"
+        },
+        {
+          "year": "1998",
+          "value": "894000"
+        },
+        {
+          "year": "1999",
+          "value": "969000"
+        },
+        {
+          "year": "2000",
+          "value": "1037000"
+        },
+        {
+          "year": "2001",
+          "value": "994000"
+        },
+        {
+          "year": "2002",
+          "value": "1001000"
+        },
+        {
+          "year": "2003",
+          "value": "1146000"
+        },
+        {
+          "year": "2004",
+          "value": "1361000"
+        },
+        {
+          "year": "2005",
+          "value": "1479000"
+        },
+        {
+          "year": "2006",
+          "value": "1601000"
+        },
+        {
+          "year": "2007",
+          "value": "1817000"
+        },
+        {
+          "year": "2008",
+          "value": "1203000"
+        },
+        {
+          "year": "2009",
+          "value": "1490000"
+        },
+        {
+          "year": "2010",
+          "value": "1609000"
+        },
+        {
+          "year": "2011",
+          "value": "1823000"
+        },
+        {
+          "year": "2012",
+          "value": "1711000"
+        },
+        {
+          "year": "2013",
+          "value": "1520000"
+        },
+        {
+          "year": "2014",
+          "value": "1350000"
+        },
+        {
+          "year": "2015",
+          "value": "1181000"
+        },
+        {
+          "year": "2016",
+          "value": "1340000"
+        },
+        {
+          "year": "2017",
+          "value": "1449000"
+        },
+        {
+          "year": "2018",
+          "value": "2025000"
+        },
+        {
+          "year": "2019",
+          "value": "2049000"
+        }
+      ]
+    },
+    "ST_INT_RCPT_CD": {
+      "label": "International tourism, receipts (current US$)",
+      "series": [
+        {
+          "year": "1995",
+          "value": "785000000"
+        },
+        {
+          "year": "1996",
+          "value": "823000000"
+        },
+        {
+          "year": "1997",
+          "value": "1077000000"
+        },
+        {
+          "year": "1998",
+          "value": "1213000000"
+        },
+        {
+          "year": "1999",
+          "value": "1211000000"
+        },
+        {
+          "year": "2000",
+          "value": "500000000"
+        },
+        {
+          "year": "2001",
+          "value": "536000000"
+        },
+        {
+          "year": "2002",
+          "value": "513000000"
+        },
+        {
+          "year": "2003",
+          "value": "619000000"
+        },
+        {
+          "year": "2004",
+          "value": "799000000"
+        },
+        {
+          "year": "2005",
+          "value": "969000000"
+        },
+        {
+          "year": "2006",
+          "value": "1181000000"
+        },
+        {
+          "year": "2007",
+          "value": "1514000000"
+        },
+        {
+          "year": "2008",
+          "value": "1398000000"
+        },
+        {
+          "year": "2009",
+          "value": "1124000000"
+        },
+        {
+          "year": "2010",
+          "value": "1620000000"
+        },
+        {
+          "year": "2011",
+          "value": "1844000000"
+        },
+        {
+          "year": "2012",
+          "value": "2004000000"
+        },
+        {
+          "year": "2013",
+          "value": "1829000000"
+        },
+        {
+          "year": "2014",
+          "value": "1745000000"
+        },
+        {
+          "year": "2015",
+          "value": "1596000000"
+        },
+        {
+          "year": "2016",
+          "value": "1472000000"
+        },
+        {
+          "year": "2017",
+          "value": "1564000000"
+        },
+        {
+          "year": "2018",
+          "value": "1784000000"
+        },
+        {
+          "year": "2019",
+          "value": "1762000000"
+        }
+      ]
+    },
+    "ST_INT_RCPT_XP_ZS": {
+      "label": "International tourism, receipts (% of total exports)",
+      "series": [
+        {
+          "year": "1995",
+          "value": "22.264768"
+        },
+        {
+          "year": "1996",
+          "value": "22.473074"
+        },
+        {
+          "year": "1997",
+          "value": "25.89215"
+        },
+        {
+          "year": "1998",
+          "value": "27.757527"
+        },
+        {
+          "year": "1999",
+          "value": "28.246022"
+        },
+        {
+          "year": "2000",
+          "value": "18.014135"
+        },
+        {
+          "year": "2001",
+          "value": "17.798461"
+        },
+        {
+          "year": "2002",
+          "value": "15.953144"
+        },
+        {
+          "year": "2003",
+          "value": "17.147443"
+        },
+        {
+          "year": "2004",
+          "value": "18.657376"
+        },
+        {
+          "year": "2005",
+          "value": "18.138455"
+        },
+        {
+          "year": "2006",
+          "value": "19.862838"
+        },
+        {
+          "year": "2007",
+          "value": "21.436252"
+        },
+        {
+          "year": "2008",
+          "value": "16.86257"
+        },
+        {
+          "year": "2009",
+          "value": "15.219802"
+        },
+        {
+          "year": "2010",
+          "value": "18.033931"
+        },
+        {
+          "year": "2011",
+          "value": "18.49955"
+        },
+        {
+          "year": "2012",
+          "value": "17.884201"
+        },
+        {
+          "year": "2013",
+          "value": "16.66023"
+        },
+        {
+          "year": "2014",
+          "value": "15.520572"
+        },
+        {
+          "year": "2015",
+          "value": "15.044775"
+        },
+        {
+          "year": "2016",
+          "value": "14.849463"
+        },
+        {
+          "year": "2017",
+          "value": "14.968355"
+        },
+        {
+          "year": "2018",
+          "value": "15.427115"
+        },
+        {
+          "year": "2019",
+          "value": "15.360146"
+        }
+      ]
+    },
+    "FX_OWN_TOTL_FE_ZS": {
+      "label": "Account ownership, female (% age 15+) [Global Findex]",
+      "series": [
+        {
+          "year": "2011",
+          "value": "39.178806"
+        },
+        {
+          "year": "2014",
+          "value": "71.13448"
+        },
+        {
+          "year": "2017",
+          "value": "77.746365"
+        },
+        {
+          "year": "2021",
+          "value": "75.357433"
+        },
+        {
+          "year": "2024",
+          "value": "86.515534"
+        }
+      ]
+    },
+    "FX_OWN_TOTL_MA_ZS": {
+      "label": "Account ownership, male (% age 15+) [Global Findex]",
+      "series": [
+        {
+          "year": "2011",
+          "value": "45.645642"
+        },
+        {
+          "year": "2014",
+          "value": "78.657904"
+        },
+        {
+          "year": "2017",
+          "value": "85.836095"
+        },
+        {
+          "year": "2021",
+          "value": "83.244996"
+        },
+        {
+          "year": "2024",
+          "value": "93.889509"
+        }
+      ]
+    },
+    "IT_NET_USER_ZS": {
+      "label": "Individuals using the Internet (% of population)",
+      "series": [
+        {
+          "year": "1990",
+          "value": "0"
+        },
+        {
+          "year": "1995",
+          "value": "0.000727"
+        },
+        {
+          "year": "1996",
+          "value": "0.00884"
+        },
+        {
+          "year": "1997",
+          "value": "0.0344"
+        },
+        {
+          "year": "1998",
+          "value": "0.0503"
+        },
+        {
+          "year": "1999",
+          "value": "0.114"
+        },
+        {
+          "year": "2000",
+          "value": "0.31806"
+        },
+        {
+          "year": "2001",
+          "value": "0.619782"
+        },
+        {
+          "year": "2002",
+          "value": "1.207774"
+        },
+        {
+          "year": "2003",
+          "value": "2.941903"
+        },
+        {
+          "year": "2004",
+          "value": "3.023528"
+        },
+        {
+          "year": "2005",
+          "value": "3.1019"
+        },
+        {
+          "year": "2006",
+          "value": "3.6"
+        },
+        {
+          "year": "2007",
+          "value": "4.4"
+        },
+        {
+          "year": "2008",
+          "value": "5.2"
+        },
+        {
+          "year": "2009",
+          "value": "6.1"
+        },
+        {
+          "year": "2010",
+          "value": "7.2"
+        },
+        {
+          "year": "2011",
+          "value": "8.8"
+        },
+        {
+          "year": "2012",
+          "value": "10.5"
+        },
+        {
+          "year": "2013",
+          "value": "13"
+        },
+        {
+          "year": "2014",
+          "value": "16.5"
+        },
+        {
+          "year": "2015",
+          "value": "16.587855"
+        },
+        {
+          "year": "2016",
+          "value": "16.6"
+        },
+        {
+          "year": "2017",
+          "value": "17.827101"
+        },
+        {
+          "year": "2018",
+          "value": "19.5"
+        },
+        {
+          "year": "2019",
+          "value": "22.668773"
+        },
+        {
+          "year": "2020",
+          "value": "24.722799"
+        },
+        {
+          "year": "2021",
+          "value": "26.9629"
+        },
+        {
+          "year": "2022",
+          "value": "29.405899"
+        },
+        {
+          "year": "2023",
+          "value": "32.0704"
+        },
+        {
+          "year": "2024",
+          "value": "34.976225"
+        }
+      ]
+    },
+    "SL_AGR_EMPL_FE_ZS": {
+      "label": "Employment in agriculture, female (% of female employment, modeled ILO)",
+      "series": [
+        {
+          "year": "1991",
+          "value": "72.913358"
+        },
+        {
+          "year": "1992",
+          "value": "72.985236"
+        },
+        {
+          "year": "1993",
+          "value": "72.966551"
+        },
+        {
+          "year": "1994",
+          "value": "72.77003"
+        },
+        {
+          "year": "1995",
+          "value": "72.4866"
+        },
+        {
+          "year": "1996",
+          "value": "72.165931"
+        },
+        {
+          "year": "1997",
+          "value": "72.026981"
+        },
+        {
+          "year": "1998",
+          "value": "71.738446"
+        },
+        {
+          "year": "1999",
+          "value": "71.550233"
+        },
+        {
+          "year": "2000",
+          "value": "71.232943"
+        },
+        {
+          "year": "2001",
+          "value": "70.428694"
+        },
+        {
+          "year": "2002",
+          "value": "69.858071"
+        },
+        {
+          "year": "2003",
+          "value": "69.170379"
+        },
+        {
+          "year": "2004",
+          "value": "68.392421"
+        },
+        {
+          "year": "2005",
+          "value": "67.512871"
+        },
+        {
+          "year": "2006",
+          "value": "66.591644"
+        },
+        {
+          "year": "2007",
+          "value": "65.622299"
+        },
+        {
+          "year": "2008",
+          "value": "65.161385"
+        },
+        {
+          "year": "2009",
+          "value": "64.663129"
+        },
+        {
+          "year": "2010",
+          "value": "63.706527"
+        },
+        {
+          "year": "2011",
+          "value": "62.94327"
+        },
+        {
+          "year": "2012",
+          "value": "62.022447"
+        },
+        {
+          "year": "2013",
+          "value": "61.162694"
+        },
+        {
+          "year": "2014",
+          "value": "60.149665"
+        },
+        {
+          "year": "2015",
+          "value": "59.232369"
+        },
+        {
+          "year": "2016",
+          "value": "58.310245"
+        },
+        {
+          "year": "2017",
+          "value": "57.489715"
+        },
+        {
+          "year": "2018",
+          "value": "56.377989"
+        },
+        {
+          "year": "2019",
+          "value": "55.478473"
+        },
+        {
+          "year": "2020",
+          "value": "57.389142"
+        },
+        {
+          "year": "2021",
+          "value": "57.959115"
+        },
+        {
+          "year": "2022",
+          "value": "55.499803"
+        },
+        {
+          "year": "2023",
+          "value": "54.802024"
+        },
+        {
+          "year": "2024",
+          "value": "54.102378"
+        },
+        {
+          "year": "2025",
+          "value": "53.355228"
+        }
+      ]
+    }
+  },
+  "osm_othaya": {
+    "center": [
+      -0.547,
+      36.943
+    ],
+    "radius_m": 15000,
+    "osm_base": "2026-10-03T22:01:51Z",
+    "counts": {
+      "guest_house": 2,
+      "hotel": 17,
+      "motel": 1,
+      "apartment": 1,
+      "camp_site": 2,
+      "museum": 1
+    },
+    "farm_or_coffee_tours": 0,
+    "features": [
+      {
+        "osm_type": "node",
+        "osm_id": 1170757938,
+        "tags": {
+          "addr:city": "Nyeri",
+          "internet_access": "no",
+          "internet_access:fee": "no",
+          "name": "Green edges",
+          "smoking": "no",
+          "stars": "5",
+          "tourism": "guest_house",
+          "wheelchair": "no"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 1170757947,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "Nyeri Karatina Road",
+          "description": "Has accomodation, Seminar and meeting rooms",
+          "internet_access": "no",
+          "internet_access:fee": "no",
+          "name": "Express Inn",
+          "smoking": "no",
+          "stars": "4",
+          "tourism": "hotel",
+          "wheelchair": "no"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 5218345419,
+        "tags": {
+          "name": "Aberdares Cottages",
+          "tourism": "motel",
+          "tourism_1": "camp_site",
+          "tourism_2": "camp_site"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 6215841021,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "Nyeri Karatina Road",
+          "name": "Senior Chief Wambugu Hotel",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 6215953799,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "C70",
+          "name": "Classic Court Hotel",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 6215953828,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "378 Gakere Road",
+          "name": "Batian Grand Hotel",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 6216117618,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "Chania Bridge",
+          "name": "Eland Safari Hotel",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 6216117622,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "Chania Bridge",
+          "name": "Sun Guest House",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 6216117624,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "Aberdare Park Road",
+          "name": "Central Hotel Nyeri",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 6216117634,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "Ring Road",
+          "name": "Itara Garden Hotel",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 6216117635,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "Ring Road",
+          "name": "Riverside Hostel",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 6216117638,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "Ring Road",
+          "name": "Davis Court Nyeri",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 6216117644,
+        "tags": {
+          "addr:city": "Nyeri",
+          "addr:street": "Nyeri-Nyahururu Road",
+          "name": "Mpeta House",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 8733475517,
+        "tags": {
+          "name": "Kwa Beth",
+          "tourism": "apartment"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 11389724776,
+        "tags": {
+          "tourism": "guest_house"
+        }
+      },
+      {
+        "osm_type": "node",
+        "osm_id": 14102585908,
+        "tags": {
+          "name": "Gura River Camp",
+          "tourism": "camp_site"
+        }
+      },
+      {
+        "osm_type": "way",
+        "osm_id": 295383708,
+        "tags": {
+          "caravans": "no",
+          "name": "Pigion Park",
+          "openfire": "yes",
+          "scout": "yes",
+          "tents": "yes",
+          "tourism": "camp_site"
+        }
+      },
+      {
+        "osm_type": "way",
+        "osm_id": 475675499,
+        "tags": {
+          "building": "hotel",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "way",
+        "osm_id": 475675500,
+        "tags": {
+          "building": "hotel",
+          "name": "Outspan Hotel",
+          "name:zh": "奥特斯班酒店",
+          "tourism": "hotel",
+          "wikidata": "Q7113028",
+          "wikipedia": "en:Outspan Hotel"
+        }
+      },
+      {
+        "osm_type": "way",
+        "osm_id": 475675517,
+        "tags": {
+          "building": "hotel",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "way",
+        "osm_id": 475675518,
+        "tags": {
+          "building": "hotel",
+          "name": "Paxtu",
+          "tourism": "hotel",
+          "wikidata": "Q1559018",
+          "wikipedia": "de:Paxtu"
+        }
+      },
+      {
+        "osm_type": "way",
+        "osm_id": 1105120586,
+        "tags": {
+          "addr:suburb": "Ruring'u Ward",
+          "building": "yes",
+          "museum": "history",
+          "name": "Nyeri Museum",
+          "operator": "National Museums of Kenya",
+          "operator:type": "public",
+          "tourism": "museum"
+        }
+      },
+      {
+        "osm_type": "way",
+        "osm_id": 1426106486,
+        "tags": {
+          "building": "hotel",
+          "tourism": "hotel"
+        }
+      },
+      {
+        "osm_type": "way",
+        "osm_id": 1426106487,
+        "tags": {
+          "building": "hotel",
+          "tourism": "hotel"
+        }
+      }
+    ]
+  }
+}
