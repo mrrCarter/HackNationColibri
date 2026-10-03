@@ -3,10 +3,11 @@
 /**
  * Adapter for Nat's W3 fixtures (eval/w3/README.md, adapter contract).
  *
- * Reads {"fixture_id", "input"} on stdin, runs the real core (ingest, evidence
- * validation, theme counts, ask-a-person, decision cards, owner choice) and
- * prints one outcome JSON. It never sees "gold" or "expected". Node-only on
- * purpose: it is a test harness, not the core.
+ * Reads {"fixture_id", "input"} on stdin, runs the real core (ingest, model
+ * output parsing, evidence validation, theme counts, ask-a-person, decision
+ * cards, owner choice) and prints one outcome JSON. It never sees "gold" or
+ * "expected". Reason strings are the core's, verbatim. Node-only on purpose:
+ * it is a test harness, not the core.
  *
  *   npm run build && node dist/tools/w3-adapter.js < fixture.json
  */
@@ -15,8 +16,9 @@ import { createHash } from "node:crypto";
 
 import { type Sha256 } from "../canon.js";
 import { buildDecisionCards, type DecisionCard, recordChoice } from "../decisions.js";
-import { summarizeThemesReport, type TaggedItem, type ThemeReport, type ThemeSummary } from "../evidence.js";
+import { type ThemeSummary } from "../evidence.js";
 import { ingestMessages, type StoredSource } from "../ingest.js";
+import { analyzeFeedback, type FeedbackAnalysis } from "../tagging.js";
 
 const sha256: Sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -24,15 +26,17 @@ const THEMES = new Set(["coffee", "farm_walk", "food", "host", "directions", "pr
 const LANGUAGES = new Set(["en", "sw", "de", "fr"]);
 
 /**
- * Deterministic stopword language id for sources that declare no language. This is
- * harness code standing in for the product's language-id step; it is not product code
- * and claims nothing about Swahili quality. Unknown is unknown: no guess, ask a person.
+ * HARNESS-ONLY language id for sources that declare no language, so the dev
+ * fixtures can exercise the core end to end. It is a stand-in for the product's
+ * language-id step (Max lane is evaluating a real detector) and claims nothing:
+ * the word lists are small function-word sets plus a Kikuyu orthography mark.
+ * Unknown is unknown: "und", and the core then asks a person (fail closed).
  */
 const STOPWORDS: Record<string, Set<string>> = {
-  en: new Set(["the", "and", "was", "were", "we", "our", "us", "is", "are", "it", "to", "of", "for", "very", "too", "not", "no", "a", "at", "there", "nobody", "knows", "lost", "tour", "coffee", "farm", "kids", "host", "sign", "turn", "twice", "long", "almost", "hours", "friendly", "great", "nice", "delicious", "lunch", "road", "drove", "past"]),
-  sw: new Set(["na", "ya", "wa", "ni", "kwa", "la", "za", "cha", "kila", "sana", "lakini", "hakuna", "wageni", "kahawa", "ilikuwa", "walipenda", "walisema", "tamu", "chakula", "mchana", "shamba", "maelekezo", "nzuri", "mbaya", "bei", "saa", "ziara", "mgeni", "asante", "karibu"]),
-  de: new Set(["der", "die", "das", "und", "war", "waren", "wir", "uns", "ist", "sehr", "nicht", "kaffee", "zu", "mit", "für", "ein", "eine", "lecker", "lang", "haben", "den", "dem", "auf", "im"]),
-  fr: new Set(["le", "la", "les", "et", "était", "étaient", "nous", "est", "très", "pas", "café", "pour", "du", "de", "un", "une", "délicieux", "trop", "accueil", "déjeuner", "aurions", "aimé", "acheter", "emporter", "à", "chaleureux", "épicé"]),
+  en: new Set(["the", "and", "was", "were", "we", "our", "us", "is", "are", "it", "to", "of", "for", "very", "too", "not", "no", "a", "at", "there", "this", "that", "with", "they", "you"]),
+  sw: new Set(["na", "ya", "wa", "ni", "kwa", "la", "za", "cha", "kila", "sana", "lakini", "hakuna", "wageni", "kahawa", "ilikuwa", "chakula", "mchana", "shamba", "nzuri", "mbaya", "bei", "saa", "ziara", "mgeni", "asante", "karibu", "sisi", "hii", "hiyo"]),
+  de: new Set(["der", "die", "das", "und", "war", "waren", "wir", "uns", "ist", "sehr", "nicht", "kaffee", "zu", "mit", "für", "ein", "eine", "haben", "den", "dem", "auf", "im", "es"]),
+  fr: new Set(["le", "la", "les", "et", "était", "étaient", "nous", "est", "très", "pas", "café", "pour", "du", "de", "un", "une", "à", "des", "il", "elle", "on"]),
 };
 const KIKUYU_MARKS = /[ĩũ]/i;
 
@@ -51,15 +55,6 @@ function detectLanguage(text: string): string | null {
   return bestScore > 0 ? best : null;
 }
 
-interface Label {
-  message_id?: unknown;
-  theme?: unknown;
-  sentiment?: unknown;
-  quote?: unknown;
-  start?: unknown;
-  end?: unknown;
-}
-
 type OwnerInput =
   | { type: "show_cards" }
   | { type: "owner_says"; card_theme?: string; transcript?: string; asr_uncertain?: boolean }
@@ -67,16 +62,9 @@ type OwnerInput =
 
 interface Input {
   messages?: unknown[];
-  model_output?: { status?: unknown; labels?: unknown; raw?: unknown };
+  model_output?: unknown;
   owner_facts?: unknown;
   owner_inputs?: OwnerInput[];
-}
-
-type RejectedLabel = { message_id: string; theme: string; reason: string };
-type WellFormedLabel = { message_id: string; theme: string; sentiment: string; quote: string; start: number; end: number };
-
-function wellFormed(l: Label): l is WellFormedLabel & Label {
-  return typeof l.message_id === "string" && typeof l.theme === "string" && typeof l.sentiment === "string" && typeof l.quote === "string" && Number.isInteger(l.start) && Number.isInteger(l.end);
 }
 
 function findingStatus(t: ThemeSummary): "enough_evidence" | "not_enough_feedback" | "contradictory" {
@@ -85,14 +73,12 @@ function findingStatus(t: ThemeSummary): "enough_evidence" | "not_enough_feedbac
   return "not_enough_feedback";
 }
 
-/** Everything the core knows about the feedback so far. Rebuilt whenever messages or labels arrive. */
+/** Everything the core knows about the feedback so far. Re-analysed whenever messages or labels arrive. */
 class Session {
   readonly sources = new Map<string, StoredSource>();
   readonly duplicates: string[] = [];
   readonly ingestRejected: Array<{ message_id: string; reason: string }> = [];
-  readonly tagged: TaggedItem[] = [];
-  readonly rejectedLabels: RejectedLabel[] = [];
-  readonly askExtra: Array<{ reason: string; message_ids: string[] }> = [];
+  modelOutput: unknown = { status: "ok", labels: [] as unknown[] };
 
   addMessages(messages: unknown[]): void {
     const result = ingestMessages(messages, sha256, this.sources);
@@ -104,43 +90,23 @@ class Session {
     for (const r of result.rejected) if (!this.ingestRejected.some((x) => x.message_id === r.message_id)) this.ingestRejected.push({ message_id: r.message_id, reason: "invalid_message" });
   }
 
+  /** Later labels (new_messages steps) extend an ok output; a malformed output stays malformed. */
   addLabels(labels: unknown[]): void {
-    const duplicateIds = new Set(this.duplicates);
-    for (const raw of labels as Label[]) {
-      const l = typeof raw === "object" && raw !== null ? raw : {};
-      if (!wellFormed(l)) {
-        this.rejectedLabels.push({ message_id: String((l as Label).message_id ?? "?"), theme: String((l as Label).theme ?? "?"), reason: "malformed_label" });
-        continue;
-      }
-      if (duplicateIds.has(l.message_id)) {
-        this.rejectedLabels.push({ message_id: l.message_id, theme: l.theme, reason: "duplicate_message" });
-        continue;
-      }
-      const src = this.sources.get(l.message_id);
-      if (!src) {
-        this.rejectedLabels.push({ message_id: l.message_id, theme: l.theme, reason: "unknown_source" });
-        continue;
-      }
-      this.tagged.push({ theme: l.theme, sentiment: l.sentiment, evidence: { source_id: l.message_id, content_hash: src.content_hash, span: { start: l.start, end: l.end }, quote: l.quote } });
+    const mo = this.modelOutput;
+    if (typeof mo === "object" && mo !== null && !Array.isArray(mo) && (mo as { status?: unknown }).status === "ok" && Array.isArray((mo as { labels?: unknown }).labels)) {
+      this.modelOutput = { status: "ok", labels: [...((mo as { labels: unknown[] }).labels), ...labels] };
     }
   }
 
-  report(): ThemeReport {
-    return summarizeThemesReport(this.tagged, this.sources, sha256, { allowedThemes: THEMES, supportedLanguages: LANGUAGES });
+  analyze(): FeedbackAnalysis {
+    return analyzeFeedback(this.modelOutput, this.sources, sha256, { allowedThemes: THEMES, supportedLanguages: LANGUAGES }, new Set(this.duplicates));
   }
 }
 
 export function runFixture(input: Input): Record<string, unknown> {
   const session = new Session();
   session.addMessages(Array.isArray(input.messages) ? input.messages : []);
-
-  const mo = input.model_output ?? {};
-  if (mo.status !== "ok" || !Array.isArray(mo.labels)) {
-    // Nothing could be read for any stored message: every one of them needs a person.
-    session.askExtra.push({ reason: "structured_output_failure", message_ids: [...session.sources.keys()].sort() });
-  } else {
-    session.addLabels(mo.labels);
-  }
+  session.modelOutput = input.model_output;
 
   // Steps 4 and 5: cards shown, owner speaks, new evidence may arrive in between.
   let shownCards: DecisionCard[] = [];
@@ -148,7 +114,7 @@ export function runFixture(input: Input): Record<string, unknown> {
   const choiceRefusals: Array<{ theme: string; reason: string }> = [];
   for (const step of input.owner_inputs ?? []) {
     if (step.type === "show_cards") {
-      shownCards = buildDecisionCards(session.report(), sha256);
+      shownCards = buildDecisionCards(session.analyze(), sha256);
     } else if (step.type === "new_messages") {
       session.addMessages(Array.isArray(step.messages) ? step.messages : []);
       session.addLabels(Array.isArray(step.labels) ? step.labels : []);
@@ -158,27 +124,21 @@ export function runFixture(input: Input): Record<string, unknown> {
         choiceRefusals.push({ theme: String(step.card_theme), reason: "card_not_shown" });
         continue;
       }
-      const current = buildDecisionCards(session.report(), sha256).find((c) => c.theme === step.card_theme) ?? null;
+      const current = buildDecisionCards(session.analyze(), sha256).find((c) => c.theme === step.card_theme) ?? null;
       const r = recordChoice({ shownCard: shown, currentCard: current, transcript: String(step.transcript ?? ""), asrUncertain: step.asr_uncertain === true });
       if (r.ok) decisions.push({ theme: r.decision.theme, choice: r.decision.choice });
       else choiceRefusals.push({ theme: shown.theme, reason: r.reason });
     }
   }
 
-  const report = session.report();
-  const rejectedLabels: RejectedLabel[] = [...session.rejectedLabels];
-  for (const r of report.rejected_tags) {
-    const reason = r.reason === "sentiment_not_allowed" ? "unknown_sentiment" : "unknown_theme";
-    rejectedLabels.push({ message_id: r.item.evidence.source_id, theme: r.item.theme, reason });
-  }
+  const analysis = session.analyze();
+  const rejectedLabels: Array<{ message_id: string; theme: string; reason: string }> = [...analysis.parse.rejected];
+  for (const r of analysis.rejected_tags) rejectedLabels.push({ message_id: r.item.evidence.source_id, theme: r.item.theme, reason: r.reason });
   const acceptedLabels: Array<{ message_id: string; theme: string }> = [];
   const counts: Record<string, { unique_messages: number; positive: number; negative: number; neutral: number }> = {};
   const findings: Array<Record<string, unknown>> = [];
-  for (const t of report.themes) {
-    for (const r of t.rejected) {
-      const reason = r.reason === "unsupported_language" ? "message_not_eligible" : r.reason;
-      rejectedLabels.push({ message_id: r.item.source_id, theme: t.theme, reason });
-    }
+  for (const t of analysis.themes) {
+    for (const r of t.rejected) rejectedLabels.push({ message_id: r.item.source_id, theme: t.theme, reason: r.reason });
     if (t.comment_count === 0) continue; // every label on this theme was rejected: no count, no finding
     for (const id of [...new Set(t.evidence.map((e) => e.source_id))]) acceptedLabels.push({ message_id: id, theme: t.theme });
     counts[t.theme] = { unique_messages: t.comment_count, positive: t.positive_sources, negative: t.negative_sources, neutral: t.neutral_sources };
@@ -192,17 +152,19 @@ export function runFixture(input: Input): Record<string, unknown> {
     findings.push(finding);
   }
 
-  const ask: Array<{ reason: string; message_ids: string[] }> = [...session.askExtra];
-  for (const a of report.ask_a_person) {
-    if (a.reason === "unsupported_language" || a.reason === "evidence_invalid") ask.push({ reason: a.reason, message_ids: a.about });
-    else if (a.reason === "structured_output_failure") ask.push({ reason: a.reason, message_ids: [...new Set(report.rejected_tags.map((r) => r.item.evidence.source_id))] });
-    else if (a.reason === "contradictory_reviews") {
-      const ids = report.themes.filter((t) => a.about.includes(t.theme)).flatMap((t) => t.evidence.map((e) => e.source_id));
+  const ask: Array<{ reason: string; message_ids: string[] }> = [];
+  for (const a of analysis.ask_a_person) {
+    if (a.reason === "contradictory_reviews") {
+      const ids = analysis.themes.filter((t) => a.about.includes(t.theme)).flatMap((t) => t.evidence.map((e) => e.source_id));
       ask.push({ reason: a.reason, message_ids: [...new Set(ids)] });
+    } else if (a.reason === "structured_output_failure" && !analysis.parse.malformed) {
+      ask.push({ reason: a.reason, message_ids: [...new Set(analysis.rejected_tags.map((r) => r.item.evidence.source_id))] });
+    } else {
+      ask.push({ reason: a.reason, message_ids: a.about });
     }
   }
 
-  const cards = (input.owner_inputs ?? []).some((s) => s.type === "show_cards") ? shownCards : buildDecisionCards(report, sha256);
+  const cards = (input.owner_inputs ?? []).some((s) => s.type === "show_cards") ? shownCards : buildDecisionCards(analysis, sha256);
 
   return {
     ingest: { duplicates: session.duplicates, rejected: session.ingestRejected },
@@ -216,6 +178,7 @@ export function runFixture(input: Input): Record<string, unknown> {
     choice_refusals: choiceRefusals,
     side_effects: { facts_changed: false, approvals_created: 0, outbox_entries: 0 },
     core_revision: process.env["SAUTI_CORE_REVISION"] ?? "unknown",
+    harness_notes: ["language id for undeclared sources is harness-only (stopword sets); the product's detector replaces it"],
   };
 }
 

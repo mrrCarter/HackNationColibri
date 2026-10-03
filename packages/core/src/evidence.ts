@@ -37,12 +37,14 @@ export interface EvidenceOptions {
 
 function languageSupported(source: SourceText, options: EvidenceOptions): boolean {
   if (!options.supportedLanguages) return true;
-  // A declared language outside the set is rejected. An undeclared language is not a rejection: the
-  // declaration is what the source said, often nothing, and detection is a separate, model-side step
-  // whose result arrives as `language` when it exists.
-  if (!source.language) return true;
-  const primary = source.language.toLowerCase().split("-")[0] ?? "";
-  return options.supportedLanguages.has(source.language.toLowerCase()) || options.supportedLanguages.has(primary);
+  // Fail closed (Nat F1, 23:09Z): when a supported set is configured, a source whose language is
+  // undeclared, undetermined ("und") or outside the set cannot be read by anyone here and goes to
+  // a person. Language detection is a separate step that must write `language` BEFORE counting.
+  if (!source.language) return false;
+  const tag = source.language.toLowerCase();
+  if (tag === "und" || tag === "unsure") return false;
+  const primary = tag.split("-")[0] ?? "";
+  return options.supportedLanguages.has(tag) || options.supportedLanguages.has(primary);
 }
 
 export function validateEvidenceItem(item: EvidenceItem, sources: ReadonlyMap<string, SourceText>, sha256: Sha256, options: EvidenceOptions = {}): EvidenceVerdict {

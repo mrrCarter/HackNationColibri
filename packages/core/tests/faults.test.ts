@@ -14,6 +14,7 @@ import { sealEnvelope, type ActionEnvelope } from "../src/envelope.js";
 import { buildDecisionCards, parseChoice, recordChoice } from "../src/decisions.js";
 import { countUniqueSources, summarizeThemes, summarizeThemesReport, validateEvidenceItem, type SourceText, type TaggedItem } from "../src/evidence.js";
 import { ingestMessages } from "../src/ingest.js";
+import { analyzeFeedback, parseModelOutput } from "../src/tagging.js";
 import { validateMoney } from "../src/money.js";
 import { applyReceipt, applyRevocation, beginDispatch, checkDispatch, decideRevocation, recordAcceptance, recordFailure, recoverAfterRestart, retry, transportLabel } from "../src/outbox.js";
 import { utf8Encode } from "../src/utf8.js";
@@ -240,6 +241,41 @@ describe("test 3: duplicate import does not inflate counts; bad citations fail",
     expect(report.ask_a_person[0]?.reason).toBe("structured_output_failure");
     const noCatalogue = summarizeThemesReport([cite(srcs, "w0", "Wifi", "angry", "wifi")], srcs, sha256);
     expect(noCatalogue.rejected_tags[0]?.reason).toBe("sentiment_not_allowed");
+  });
+
+  it("Nat F1: with a supported-language set, an undeclared or undetermined language fails closed", () => {
+    const srcs = new Map([
+      ["u0", { source_id: "u0", text: "Wega muno.", content_hash: sourceTextHash("Wega muno.", sha256) }], // no language declared at all
+      ["u1", { source_id: "u1", text: "Something.", content_hash: sourceTextHash("Something.", sha256), language: "und" }],
+      ["e0", mk("e0", "Coffee was great.", "en")],
+    ]);
+    const report = summarizeThemesReport(
+      [cite(srcs, "u0", "Wega", "positive", "coffee"), cite(srcs, "u1", "Something", "positive", "coffee"), cite(srcs, "e0", "Coffee", "positive", "coffee")],
+      srcs,
+      sha256,
+      { supportedLanguages: new Set(["sw", "en", "de", "fr"]) },
+    );
+    expect(report.themes[0]?.comment_count).toBe(1);
+    expect(report.themes[0]?.rejected.map((r) => r.item.source_id).sort()).toEqual(["u0", "u1"]);
+    expect(report.ask_a_person.find((a) => a.reason === "unsupported_language")?.about).toEqual(["u0", "u1"]);
+    // without a configured set, nothing is gated on language
+    expect(summarizeThemesReport([cite(srcs, "u0", "Wega", "positive", "coffee")], srcs, sha256).themes[0]?.comment_count).toBe(1);
+  });
+
+  it("Nat F6: unreadable model output is a structured-output failure in the core, naming every stored source", () => {
+    const srcs = new Map([["e0", mk("e0", "Coffee was great.", "en")], ["e1", mk("e1", "Nice.", "en")]]);
+    for (const raw of ["{not json", { status: "malformed", raw: "..." }, 42, null]) {
+      const a = analyzeFeedback(raw, srcs, sha256, { allowedThemes: new Set(["coffee"]) });
+      expect(a.parse.malformed).toBe(true);
+      expect(a.themes).toEqual([]);
+      expect(a.ask_a_person).toEqual([{ reason: "structured_output_failure", detail: expect.any(String), about: ["e0", "e1"] }]);
+    }
+    const ok = analyzeFeedback({ status: "ok", labels: [{ message_id: "e0", theme: "coffee", sentiment: "positive", quote: "Coffee", start: 0, end: 6 }, { message_id: "zz", theme: "coffee", sentiment: "positive", quote: "x", start: 0, end: 1 }, { theme: "coffee" }] }, srcs, sha256, { allowedThemes: new Set(["coffee"]) });
+    expect(ok.parse.malformed).toBe(false);
+    expect(ok.parse.rejected).toEqual([{ message_id: "zz", theme: "coffee", reason: "unknown_source" }, { message_id: "?", theme: "coffee", reason: "malformed_label" }]);
+    expect(ok.themes[0]).toMatchObject({ theme: "coffee", comment_count: 1 });
+    const dup = parseModelOutput([{ message_id: "e1", theme: "coffee", sentiment: "neutral", quote: "Nice", start: 0, end: 4 }], srcs, new Set(["e1"]));
+    expect(dup.rejected).toEqual([{ message_id: "e1", theme: "coffee", reason: "duplicate_message" }]);
   });
 
   it("probe DEV-011: a source in an unsupported language is not counted and asks a person", () => {
