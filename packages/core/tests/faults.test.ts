@@ -11,7 +11,9 @@ import { reconcileSlot, validateAppointment } from "../src/calendar.js";
 import { sourceTextHash } from "../src/canon.js";
 import { observeClock } from "../src/clock.js";
 import { sealEnvelope, type ActionEnvelope } from "../src/envelope.js";
+import { buildDecisionCards, parseChoice, recordChoice } from "../src/decisions.js";
 import { countUniqueSources, summarizeThemes, summarizeThemesReport, validateEvidenceItem, type SourceText, type TaggedItem } from "../src/evidence.js";
+import { ingestMessages } from "../src/ingest.js";
 import { validateMoney } from "../src/money.js";
 import { applyReceipt, beginDispatch, checkDispatch, recordAcceptance, recordFailure, recoverAfterRestart, requestCancel, retry, transportLabel } from "../src/outbox.js";
 import { utf8Encode } from "../src/utf8.js";
@@ -256,6 +258,61 @@ describe("test 3: duplicate import does not inflate counts; bad citations fail",
     expect(report.themes[0]).toMatchObject({ comment_count: 3, verdict: "supported", direction: "positive" });
     expect(report.themes[0]?.rejected[0]?.reason).toBe("unsupported_language");
     expect(report.ask_a_person.map((a) => a.reason)).toContain("unsupported_language");
+  });
+});
+
+describe("W3 steps 4 and 5: decision cards and the owner's choice", () => {
+  const mk = (id: string, t: string): SourceText => ({ source_id: id, text: t, content_hash: sourceTextHash(t, sha256), language: "en" });
+  const texts = ["Directions were confusing.", "The directions were confusing for us too.", "Confusing directions, lovely coffee.", "Directions were perfectly clear."];
+  const srcs = new Map(texts.map((t, i) => [`s${i}`, mk(`s${i}`, t)] as const));
+  const cite = (id: string, q: string, sentiment: string): TaggedItem => {
+    const s = srcs.get(id)!;
+    const st = s.text.indexOf(q);
+    return { theme: "directions", sentiment, evidence: { source_id: id, content_hash: s.content_hash, span: { start: st, end: st + q.length }, quote: q } };
+  };
+  const three = [cite("s0", "confusing", "negative"), cite("s1", "confusing", "negative"), cite("s2", "Confusing", "negative")];
+
+  it("a card exists only with enough evidence, cites exact supporting spans, carries only the count as a number, and is prospective", () => {
+    const none = buildDecisionCards(summarizeThemesReport(three.slice(0, 2), srcs, sha256), sha256);
+    expect(none).toEqual([]);
+    const [card] = buildDecisionCards(summarizeThemesReport([...three, cite("s3", "clear", "positive")], srcs, sha256), sha256);
+    expect(card).toMatchObject({ theme: "directions", direction: "negative", comment_count: 4, prospective: true, text_review: "unreviewed", choices: ["try", "reject", "ask_someone"] });
+    expect(card!.quotes.map((q) => q.message_id)).toEqual(["s0", "s1", "s2"]);
+    expect(card!.dissenting_source_ids).toEqual(["s3"]);
+    expect(card!.text.match(/\d+/g)).toEqual(["4"]);
+    expect(/\b(moja|mbili|tatu|one|two|three)\b/i.test(card!.text)).toBe(false);
+  });
+
+  it("only explicit, confident choices on the current card are recorded; a generic yes, uncertain audio or new evidence never are", () => {
+    expect(parseChoice("ndiyo")).toBeNull();
+    expect(parseChoice("sawa, jaribu")).toBe("try");
+    expect(parseChoice("kataa")).toBe("reject");
+    expect(parseChoice("uliza mtu")).toBe("ask_someone");
+    expect(parseChoice("jaribu au kataa")).toBeNull();
+    const shown = buildDecisionCards(summarizeThemesReport(three, srcs, sha256), sha256)[0]!;
+    expect(recordChoice({ shownCard: shown, currentCard: shown, transcript: "jaribu" })).toMatchObject({ ok: true, decision: { theme: "directions", choice: "try", card_digest: shown.card_digest } });
+    expect(recordChoice({ shownCard: shown, currentCard: shown, transcript: "ndiyo" })).toMatchObject({ ok: false, reason: "no_explicit_choice" });
+    expect(recordChoice({ shownCard: shown, currentCard: shown, transcript: "jaribu", asrUncertain: true })).toMatchObject({ ok: false, reason: "asr_uncertain" });
+    const withNewEvidence = buildDecisionCards(summarizeThemesReport([...three, cite("s3", "clear", "positive")], srcs, sha256), sha256)[0]!;
+    expect(withNewEvidence.card_digest).not.toBe(shown.card_digest);
+    expect(recordChoice({ shownCard: shown, currentCard: withNewEvidence, transcript: "jaribu" })).toMatchObject({ ok: false, reason: "card_stale" });
+    expect(recordChoice({ shownCard: shown, currentCard: null, transcript: "kataa" })).toMatchObject({ ok: false, reason: "card_gone" });
+  });
+
+  it("ingest keeps the first copy of a source and reports later syncs as duplicates, including across a restart", () => {
+    const batch = [
+      { id: "g1", source: "google_review", external_id: "google:1", received_at: "2026-10-01T10:00:00Z", text: "Nice.", lang: "en" },
+      { id: "g1b", source: "google_review", external_id: "google:1", received_at: "2026-10-01T11:00:00Z", text: "Nice.", lang: "en" },
+      { id: "bad", source: "tripadvisor_review", external_id: "ta:1", received_at: "2026-10-01T10:00:00Z", text: "x" },
+      { id: "blank", source: "google_review", external_id: "google:2", received_at: "2026-10-01T10:00:00Z", text: "   " },
+    ];
+    const first = ingestMessages(batch, sha256);
+    expect([...first.sources.keys()]).toEqual(["g1"]);
+    expect(first.duplicates).toEqual(["g1b"]);
+    expect(first.rejected).toEqual([{ message_id: "bad", reason: "unknown_source_type" }, { message_id: "blank", reason: "invalid_message" }]);
+    const again = ingestMessages([batch[0]!], sha256, first.sources);
+    expect(again.sources.size).toBe(0);
+    expect(again.duplicates).toEqual(["g1"]);
   });
 });
 

@@ -37,7 +37,10 @@ export interface EvidenceOptions {
 
 function languageSupported(source: SourceText, options: EvidenceOptions): boolean {
   if (!options.supportedLanguages) return true;
-  if (!source.language) return false; // unknown language cannot be called supported
+  // A declared language outside the set is rejected. An undeclared language is not a rejection: the
+  // declaration is what the source said, often nothing, and detection is a separate, model-side step
+  // whose result arrives as `language` when it exists.
+  if (!source.language) return true;
   const primary = source.language.toLowerCase().split("-")[0] ?? "";
   return options.supportedLanguages.has(source.language.toLowerCase()) || options.supportedLanguages.has(primary);
 }
@@ -108,6 +111,10 @@ export interface ThemeSummary {
   neutral_sources: number;
   /** The side the conclusion would rest on, if any. */
   direction: ThemeDirection;
+  /** Source ids (one per distinct comment) on the supporting side. Empty unless direction is positive or negative. */
+  supporting_source_ids: string[];
+  /** Source ids on the opposite side: the dissent that must stay visible. */
+  dissenting_source_ids: string[];
   verdict: ThemeVerdict;
   /** What the owner should be told when the verdict is not "supported". Keys for Experience to render. */
   note: "not_enough_feedback" | "conflicting_evidence" | "one_dissenting_comment" | "no_clear_opinion" | null;
@@ -194,7 +201,13 @@ export function summarizeThemesReport(tagged: readonly TaggedItem[], sources: Re
       else firstIdByKey.set(key, id);
     }
     const bySentiment: Record<Sentiment, Set<string>> = { positive: new Set(), negative: new Set(), neutral: new Set() };
-    for (const t of items) if (validIds.has(t.evidence.source_id) && isSentiment(t.sentiment)) bySentiment[t.sentiment].add(commentKeyOf(t.evidence.source_id));
+    const idsBySentiment: Record<Sentiment, Set<string>> = { positive: new Set(), negative: new Set(), neutral: new Set() };
+    for (const t of items) {
+      if (!validIds.has(t.evidence.source_id) || !isSentiment(t.sentiment)) continue;
+      const key = commentKeyOf(t.evidence.source_id);
+      bySentiment[t.sentiment].add(key);
+      idsBySentiment[t.sentiment].add(firstIdByKey.get(key) ?? t.evidence.source_id);
+    }
     const pos = bySentiment.positive.size;
     const neg = bySentiment.negative.size;
     const neu = bySentiment.neutral.size;
@@ -222,6 +235,8 @@ export function summarizeThemesReport(tagged: readonly TaggedItem[], sources: Re
       direction = null;
     }
     if (verdict === "conflicting") ask.push({ reason: "contradictory_reviews", detail: `visitors disagree about ${theme}: ${pos} positive, ${neg} negative comments`, about: [theme] });
+    const supporting = direction === "positive" ? idsBySentiment.positive : direction === "negative" ? idsBySentiment.negative : new Set<string>();
+    const dissenting = direction === "positive" ? idsBySentiment.negative : direction === "negative" ? idsBySentiment.positive : new Set<string>();
     themes.push({
       theme,
       comment_count: count,
@@ -232,6 +247,8 @@ export function summarizeThemesReport(tagged: readonly TaggedItem[], sources: Re
       negative_sources: neg,
       neutral_sources: neu,
       direction,
+      supporting_source_ids: [...supporting].sort(),
+      dissenting_source_ids: [...dissenting].sort(),
       verdict,
       note,
       evidence: dedupeSpans(report.valid),
