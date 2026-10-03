@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "expect": "reject",
+  "reason": "hash equality is not owner authentication",
+  "input": {
+    "schema": "sauti.approval_record",
+    "schema_version": "1.0.0",
+    "approval_id": "11111111-2222-4333-8444-555555555555",
+    "action_id": "42424242-1234-4abc-8123-abcdefabcdef",
+    "digest": "b44ea066fa95208d81bb0934909294a4fac2caf7f84acdfc372f5a893a897ec8",
+    "fact_revision": 1,
+    "decision": "approved",
+    "decided_at": "2026-10-03T20:10:00Z"
+  }
+}

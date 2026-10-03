@@ -1,0 +1,9 @@
+{
+  "synthetic": true,
+  "note": "Synthetic fixture. Not a real customer, not native-reviewed Swahili, not a send receipt.",
+  "source_id": "synthetic-review-001",
+  "source_type": "direct_review",
+  "language": "sw",
+  "text": "Kahawa ilikuwa nzuri sana, lakini maelekezo ya kufika yalikuwa magumu — tulipotea njia.",
+  "content_hash": "186045d04f93118af6aba9ff5805cdf0e948bba2fd1d8600e157e594923d2daa"
+}
