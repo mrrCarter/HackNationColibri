@@ -130,7 +130,7 @@ test("with the outbox: 400 -> FAILED (retried), 500 -> UNCERTAIN (never resent),
 test("fromEnv: names the missing variables only; builds the transport when complete", () => {
   assert.throws(() => fromEnv({ TWILIO_AUTH_TOKEN: TOKEN }), (e) => {
     assert.ok(e instanceof NotConfiguredError);
-    assert.deepEqual(e.missing, ["TWILIO_ACCOUNT_SID", "TWILIO_FROM_NUMBER", "HUB_CLIP_BASE_URL"]);
+    assert.deepEqual(e.missing, ["TWILIO_ACCOUNT_SID", "TWILIO_NUMBER", "HUB_CLIP_BASE_URL"]);
     assert.ok(!e.message.includes(TOKEN));
     return true;
   });
@@ -243,4 +243,48 @@ test("webhook: onSms failure -> 500 without details; config is checked", async (
   });
   assert.throws(() => createTwilioWebhook({ publicUrl: "https://hub.example.test", onSms: () => {} }), NotConfiguredError);
   assert.throws(() => createTwilioWebhook({ authToken: TOKEN, publicUrl: "http://hub.example.test", onSms: () => {} }), /https/);
+});
+
+test("smsOnly: no clip URL needed; a call is refused (calls_disabled, permanent) without any request; SMS still sent", async () => {
+  const f = fakeFetch();
+  assert.throws(() => createTwilioTransport({ accountSid: SID, authToken: TOKEN, from: FROM, fetchImpl: f }), NotConfiguredError);
+  const t = createTwilioTransport({ accountSid: SID, authToken: TOKEN, from: FROM, fetchImpl: f, smsOnly: true });
+  await assert.rejects(t.send({ idempotency_key: KEY, channel: "call", recipient: NOOR, body: JSON.stringify(["visits.booked"]) }),
+    (e) => e.code === "calls_disabled" && e.notAccepted === true && e.permanent === true);
+  assert.equal(f.calls.length, 0);
+  await t.send({ idempotency_key: KEY, channel: "sms", recipient: NOOR, body: "x" });
+  assert.equal(f.calls.length, 1);
+  // refusals before any request are permanent; an HTTP 4xx from Twilio is not (the outbox retries it, up to maxAttempts)
+  await assert.rejects(t.send({ idempotency_key: KEY, channel: "sms", recipient: "nobody", body: "x" }), (e) => e.permanent === true);
+  const r400 = createTwilioTransport({ accountSid: SID, authToken: TOKEN, from: FROM, smsOnly: true, fetchImpl: fakeFetch({ status: 400, json: { code: 21211 } }) });
+  await assert.rejects(r400.send({ idempotency_key: KEY, channel: "sms", recipient: NOOR, body: "x" }), (e) => e.notAccepted === true && e.permanent === undefined);
+});
+
+test("security: POSTs use redirect: \"error\" to api.twilio.com only; a 3xx is UNCERTAIN, never followed", async () => {
+  const f = fakeFetch();
+  await transport(f).send({ idempotency_key: KEY, channel: "sms", recipient: NOOR, body: "x" });
+  assert.equal(f.calls[0].init.redirect, "error");
+  assert.ok(f.calls[0].url.startsWith(`https://api.twilio.com/2010-04-01/Accounts/${SID}/`));
+  let n = 0;
+  const r = async () => { n++; return { status: 307, headers: { location: "https://evil.example.test/" }, text: async () => "" }; };
+  await assert.rejects(transport(r).send({ idempotency_key: KEY, channel: "sms", recipient: NOOR, body: "x" }),
+    (e) => e.code === "redirect_refused" && e.notAccepted === undefined && e.status === 307);
+  assert.equal(n, 1);
+});
+
+test("API key (primary): Authorization is Basic base64(KEY_SID:KEY_SECRET) while the URL keeps the ACCOUNT SID", async () => {
+  const KEY_SID = "SK" + "5".repeat(32);
+  const KEY_SECRET = "fake-key-secret-not-real";
+  const f = fakeFetch();
+  const t = fromEnv({ TWILIO_ACCOUNT_SID: SID, TWILIO_API_KEY_SID: KEY_SID, TWILIO_API_KEY_SECRET: KEY_SECRET, TWILIO_NUMBER: FROM, TWILIO_AUTH_TOKEN: TOKEN },
+    { fetchImpl: f, smsOnly: true });
+  await t.send({ idempotency_key: KEY, channel: "sms", recipient: NOOR, body: "x" });
+  assert.equal(f.calls[0].init.headers.Authorization, `Basic ${Buffer.from(`${KEY_SID}:${KEY_SECRET}`).toString("base64")}`);
+  assert.equal(f.calls[0].url, `https://api.twilio.com/2010-04-01/Accounts/${SID}/Messages.json`);
+  // neither a key nor a token: the missing NAMES only; half a key names the missing half
+  assert.throws(() => fromEnv({ TWILIO_ACCOUNT_SID: SID, TWILIO_NUMBER: FROM }, { smsOnly: true }),
+    (e) => e instanceof NotConfiguredError && JSON.stringify(e.missing) === JSON.stringify(["TWILIO_API_KEY_SID", "TWILIO_API_KEY_SECRET"]));
+  assert.throws(() => fromEnv({ TWILIO_ACCOUNT_SID: SID, TWILIO_NUMBER: FROM, TWILIO_API_KEY_SID: KEY_SID, TWILIO_AUTH_TOKEN: TOKEN }, { smsOnly: true }),
+    (e) => JSON.stringify(e.missing) === JSON.stringify(["TWILIO_API_KEY_SECRET"]) && !e.message.includes(KEY_SID) && !e.message.includes(TOKEN));
+  assert.throws(() => createTwilioTransport({ accountSid: SID, apiKeySid: "AC" + "5".repeat(32), apiKeySecret: KEY_SECRET, from: FROM, smsOnly: true, fetchImpl: f }), /SK/);
 });
