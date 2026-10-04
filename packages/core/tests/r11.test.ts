@@ -58,20 +58,22 @@ function issued(env = voiceEnvelope(), at = T0) {
   return r;
 }
 
+/** Same length, every digit different: a wrong code of the right shape. */
 function wrongCode(code: string): string {
-  return code === "0000" ? "1111" : "0000";
+  return code.replace(/[0-9]/g, (d) => String((Number(d) + 1) % 10));
 }
 
 describe("r1.1: one-time approval codes from the enrolled basic phone", () => {
   it("issues a code the hub never stores: only a domain-separated hash bound to tenant, action, digest and challenge", () => {
     const env = voiceEnvelope();
     const { code, challenge } = issued(env);
-    expect(code).toMatch(/^[0-9]{4}$/);
+    expect(code).toMatch(/^[0-9]{6}$/);
     expect(challenge.code_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(challenge)).not.toContain(code);
     expect(challenge.action_id).toBe(env.action_id);
     expect(challenge.digest).toBe(env.digest);
     expect(challenge.expires_at).toBe("2026-10-04T08:25:00Z");
+    expect(challenge.code_length).toBe(6);
     expect(challenge.attempts).toBe(0);
     expect(challenge.used_at).toBeNull();
     // the same code for another action or content hashes differently

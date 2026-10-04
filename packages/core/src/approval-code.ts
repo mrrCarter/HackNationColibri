@@ -3,7 +3,7 @@
  * 3, 2026-10-04). A sender id can be spoofed, so an SMS "NDIYO" is never an
  * approval by itself. It counts only when it comes from Noor's enrolled number
  * AND carries the per-proposal code the hub itself sent in its read-back SMS
- * ("Jibu NDIYO B 4821"). The code is random, never stored (only a
+ * ("Jibu NDIYO B 482193"). The code is random, never stored (only a
  * domain-separated hash bound to tenant, action, content digest and challenge),
  * single-use, expiring, with a lockout. A verified code mints an
  * AuthenticatedSession with unlock "sms_code" that is bound to that one action;
@@ -14,8 +14,9 @@
  * an SMS or maps a phone number; the hub maps Noor's E.164 to an opaque
  * device id in TrustedOwner.trusted_device_ids and passes that id in.
  *
- * Strength: with the default 4 digits and 5 attempts, a spoofer who also
- * forges the enrolled number succeeds with probability 5/10000 per challenge,
+ * Strength: with the default 6 digits and 5 attempts, a spoofer who also
+ * forges the enrolled number succeeds with probability 5/1,000,000 per
+ * challenge (warden, 2026-10-04: aligned with the hub; 4 is the floor),
  * and a hub read of the stored hash is worth nothing without the DB it sits
  * in. Lockout is per challenge: a locked proposal is cancelled and re-proposed
  * with a fresh read-back, so an attacker spamming wrong codes can delay Noor
@@ -26,7 +27,7 @@ import { type AuthenticatedSession, type TrustedOwner } from "./approval.js";
 import { APPROVAL_CODE_DOMAIN, digest, type Sha256 } from "./canon.js";
 import { type ClockReading, formatTimestamp, parseTimestamp } from "./clock.js";
 
-export const DEFAULT_CODE_LENGTH = 4;
+export const DEFAULT_CODE_LENGTH = 6;
 export const DEFAULT_CODE_TTL_MS = 15 * 60 * 1000;
 export const DEFAULT_CODE_MAX_ATTEMPTS = 5;
 
