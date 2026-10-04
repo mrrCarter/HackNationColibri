@@ -8,7 +8,7 @@ import { CLOSED_DAYS_KV } from "../src/hub.mjs";
 import { createProposal, handleOwnerSms, parseSms, REPLIES } from "../src/commands.mjs";
 import { gsm7Length, isGsm7 } from "../src/notify.mjs";
 import {
-  decideBookingRequest, detectTouristLanguage, LANGID_AVAILABLE, parseBookingRequest, requestBooking,
+  decideBookingRequest, detectTouristLanguage, markReissueQueued, LANGID_AVAILABLE, parseBookingRequest, requestBooking,
 } from "../src/booking_requests.mjs";
 import { renderTouristReply } from "../src/tourist_replies.mjs";
 
@@ -413,4 +413,78 @@ test("templates never contain tourist text, in any language or outcome", { skip:
     for (const o of outputs.filter(Boolean)) assert.equal(o.toLowerCase().includes(CANARY.toLowerCase()), false, `${r.action}: ${o}`);
     assert.ok(outputs.filter(Boolean).length >= 1);
   }
+});
+
+test("codex #47674: an approved 09:00 start is never moved; Noor gets a fresh read-back with the new time", () => {
+  const { store, sheet, id, code } = proposed(); // read back and approved with the sheet's 09:00 start
+  assert.equal(JSON.parse(row(store, id).body).time, "09:00");
+  sheet.hours = { start: "10:00:00", end: "16:00:00" }; // hours changed after Noor's approval
+  owner(store, `NDIYO ${id} ${code}`);
+  const d = decideBookingRequest(store, sheet, row(store, id), { type: "approve" }, NOW);
+  assert.equal(d.outcome, "needs_owner");
+  assert.equal(d.reason, "time_changed");
+  assert.equal(d.booking, null);
+  assert.equal(d.tourist_sms, null, "the tourist is told nothing before Noor decides on the new time");
+  assert.equal(d.owner_sms_sensitive, true);
+  assert.match(d.owner_sms, /saa ya ziara imebadilika/);
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE platform = 'direct'").get().n, 0);
+  const again = decideBookingRequest(store, sheet, row(store, id), { type: "approve" }, NOW);
+  assert.equal(again.reissued_as, d.reissued_as, "a re-run reuses the same fresh proposal (new code, see the restart test)");
+  // Noor approves the fresh one with the latest code: booked at 10:00, the time she approved.
+  const [id2, code2] = codeOf(again.owner_sms);
+  assert.equal(id2, d.reissued_as);
+  assert.equal(JSON.parse(row(store, id2).body).time, "10:00");
+  owner(store, `NDIYO ${id2} ${code2}`);
+  const ok = decideBookingRequest(store, sheet, row(store, id2), { type: "approve" }, NOW);
+  assert.equal(ok.outcome, "confirmed");
+  assert.equal(ok.booking.slot_start, "10:00");
+});
+
+test("codex #47674 restart: a crash before the fresh proposal, or before its read-back is queued, loses nothing", () => {
+  const { store, sheet, id, code } = proposed();
+  sheet.hours = { start: "10:00:00", end: "16:00:00" };
+  owner(store, `NDIYO ${id} ${code}`);
+  const fresh = () => store.db.prepare("SELECT short_id, state FROM proposals WHERE json_extract(body, '$.reissue_of') = ?").all(id);
+  // Case 1: the process dies before the fresh proposal exists.
+  const prepare = store.db.prepare.bind(store.db);
+  store.db.prepare = (sql) => { if (/^INSERT INTO proposals/.test(sql)) throw new Error("power cut"); return prepare(sql); };
+  assert.throws(() => decideBookingRequest(store, sheet, row(store, id), { type: "approve" }, NOW), /power cut/);
+  store.db.prepare = prepare;
+  assert.equal(fresh().length, 0);
+  // Recovery re-runs the approved proposal: the fresh one is created and read back.
+  const r1 = decideBookingRequest(store, sheet, row(store, id), { type: "approve" }, NOW);
+  assert.equal(r1.outcome, "needs_owner");
+  assert.ok(r1.owner_sms);
+  // Case 2: the read-back was produced but never queued (crash): the re-run returns the IDENTICAL message (same
+  // proposal, same code), so the outbox deduplicates it and Noor never gets two different codes.
+  const r2 = decideBookingRequest(store, sheet, row(store, id), { type: "approve" }, NOW);
+  assert.equal(r2.reissued_as, r1.reissued_as);
+  assert.equal(r2.owner_sms, r1.owner_sms);
+  assert.equal(fresh().length, 1, "never a second fresh proposal");
+  // Case 3 (codex): queued, then a crash before proposal.executed: a re-run produces nothing.
+  markReissueQueued(store, id);
+  const r2b = decideBookingRequest(store, sheet, row(store, id), { type: "approve" }, NOW);
+  assert.equal(r2b.already, true);
+  assert.equal(r2b.owner_sms, null);
+  const [id2, newCode] = codeOf(r1.owner_sms);
+  assert.equal(owner(store, `NDIYO ${id2} ${newCode}`).command.type, "approve");
+  assert.equal(decideBookingRequest(store, sheet, row(store, id2), { type: "approve" }, NOW).booking.slot_start, "10:00");
+  // After Noor answered the fresh one, a re-run of the old one changes nothing.
+  const r3 = decideBookingRequest(store, sheet, row(store, id), { type: "approve" }, NOW);
+  assert.equal(r3.already, true);
+  assert.equal(r3.owner_sms, null);
+});
+
+test("warden (platform path): a booking sold for another time than the tour start is a conflict; same time in any format books", () => {
+  const { store, sheet } = setup();
+  const sold = (s, ref, time) => applyBookingEvent(store, s, {
+    id: `mail:${ref}`, kind: "booking", channel: "email", received_at: NOW.toISOString(), synthetic: true,
+    booking: { platform: "getyourguide", ref, date: "2026-10-17", time, party_size: 2, visitor_name: "Synthetic Guest" },
+  });
+  const moved = { ...sheet, hours: { start: "10:00:00", end: "16:00:00" } };
+  assert.equal(sold(moved, "GYG-T1", "09:00").action, "conflict", "sold 09:00, tour now starts 10:00");
+  assert.equal(store.db.prepare("SELECT state FROM bookings WHERE external_ref = 'GYG-T1'").get().state, "conflict");
+  assert.equal(sold(sheet, "GYG-T2", "11:00").action, "conflict", "sold 11:00, tour starts 09:00");
+  assert.equal(sold(moved, "GYG-T3", "10:00").action, "confirmed", "sheet '10:00:00' vs sold '10:00'");
+  assert.equal(sold({ ...sheet, hours: { start: "10:00", end: "16:00" } }, "GYG-T4", "10:00").action, "confirmed", "'10:00' vs '10:00'");
 });

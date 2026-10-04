@@ -18,7 +18,7 @@
 // SWAHILI REVIEW STATUS: UNREVIEWED (read-back and owner notes below).
 import { CLOSED_DAYS_KV } from "./hub.mjs";
 import { confirmedOn, FARM_TIMEZONE, seatsTaken } from "./bookings.mjs";
-import { createProposal, proposalDigest, sanitizeSuggestion } from "./commands.mjs";
+import { createProposal, issueCode, proposalDigest, sanitizeSuggestion } from "./commands.mjs";
 import { checkCapacity } from "./core.mjs";
 import { normalizePhone, sanitizeText } from "./intake/sms.mjs";
 import { EAT_OFFSET_MS, firstName, gsm7Length, isGsm7, parseIsoDate, SMS_SINGLE_SEGMENT, swDateShort } from "./notify.mjs";
@@ -36,6 +36,14 @@ const BUDGET_KV = "booking_requests.budget";
 const EVENT_KV = "booking_requests.event.";
 const OUTCOME_KV = "booking_requests.outcome.";
 const VOICE_CALL_KV = "booking_requests.voice_call.";
+const REISSUE_SMS_KV = "booking_requests.reissue_sms."; // + old proposal id -> { reissued_as, sms|null, queued }
+
+/** The hub queued the fresh read-back (owner_sms of a time_changed outcome): drop its text, never produce it again. */
+export function markReissueQueued(store, oldProposalId) {
+  const k = REISSUE_SMS_KV + oldProposalId;
+  const cur = store.getKV(k);
+  if (cur) store.setKV(k, { reissued_as: cur.reissued_as, sms: null, queued: true });
+}
 
 // ---------------------------------------------------------------------------------------------------------
 // Language: contrib/max/langid (franc). It needs `npm ci --prefix contrib/max/langid`; without it every text is
@@ -576,7 +584,7 @@ export function decideBookingRequest(store, sheet, proposalRow, decision, now = 
   switch (decision?.type) {
     case "approve": {
       if (row.state !== "approved") return { ok: false, reason: "not_approved" };
-      return store.transaction(() => {
+      const done = store.transaction(() => {
         const booking_id = `direct:${id}`;
         const existing = store.db.prepare("SELECT body FROM bookings WHERE platform = 'direct' AND external_ref = ?").get(id);
         if (existing) {
@@ -587,7 +595,16 @@ export function decideBookingRequest(store, sheet, proposalRow, decision, now = 
         if (prior?.outcome === "unavailable") return out({ already: true, outcome: "unavailable", tourist_sms: prior.tourist_sms, owner_sms: prior.owner_sms });
 
         // Re-check by code: the day may have filled up or been closed since the proposal.
-        const avail = checkAvailability(store, sheet, { date: body.date, party_size: body.party_size, request_id: booking_id, now });
+        const checked = checkAvailability(store, sheet, { date: body.date, party_size: body.party_size, request_id: booking_id, now });
+        // Codex #47674 / warden: Noor approved a digest-bound START TIME too. If the sheet's hours changed since
+        // (09:00 -> 10:00), confirming would silently move the visit. Nothing is booked and the tourist is told
+        // nothing yet: Noor gets a FRESH read-back with the new time and a new code (below, outside this
+        // transaction), and only her answer to that one can confirm.
+        if (checked.ok && body.time && checked.start !== body.time) {
+          store.setKV(OUTCOME_KV + id, { outcome: "needs_owner", reason: "time_changed", at: now.toISOString() });
+          return { reissue: { start: checked.start, price_kes_total: checked.price_kes_total } };
+        }
+        const avail = checked;
         if (!avail.ok) {
           const reason = ["full", "day_closed", "closed_day", "hours", "too_late"].includes(avail.reason) ? avail.reason : "day_closed";
           const facts = reason === avail.reason ? avail.facts : { date: body.date };
@@ -616,6 +633,50 @@ export function decideBookingRequest(store, sheet, proposalRow, decision, now = 
           .run(booking_id, "direct", id, body.date, body.party_size, "confirmed", JSON.stringify(b));
         store.setKV(OUTCOME_KV + id, { outcome: "confirmed", at: now.toISOString() });
         return out({ outcome: "confirmed", booking: b, tourist_sms: confirmedSms(b, lang) });
+      });
+      if (!done.reissue) return done;
+      // The fresh proposal (createProposal opens its own transaction, so it runs after the one above committed).
+      // Crash-safe and idempotent (codex restart probes), in three durable steps:
+      //  1. the fresh proposal carries reissue_of, so a re-run finds it instead of creating another;
+      //  2. the produced read-back is kept (REISSUE_SMS_KV, the same exposure as a QUEUED outbox row) until the hub
+      //     reports it queued: a re-run returns the IDENTICAL message, which the outbox deduplicates, so Noor never
+      //     gets a second read-back with a different code;
+      //  3. once queued (markReissueQueued), the text is dropped and a re-run changes nothing.
+      // Only if a crash happened before step 2 (nothing was ever produced to send) does a re-run issue a new code.
+      const found = store.db
+        .prepare("SELECT short_id, state, body FROM proposals WHERE kind = ? AND json_extract(body, '$.reissue_of') = ? ORDER BY created_at DESC LIMIT 1")
+        .get(PROPOSAL_KIND, id);
+      const pending = store.getKV(REISSUE_SMS_KV + id);
+      if (found && (found.state !== "proposed" || pending?.queued)) {
+        return out({ already: true, outcome: "needs_owner", reason: "time_changed", reissued_as: found.short_id, tourist_sms: null });
+      }
+      if (found && pending?.sms && pending.reissued_as === found.short_id) {
+        return out({
+          outcome: "needs_owner", reason: "time_changed", reissued_as: found.short_id, tourist_sms: null,
+          owner_sms: pending.sms, owner_sms_sensitive: true, reissue_of: id,
+        });
+      }
+      let fresh;
+      let shortId;
+      let code;
+      if (found) {
+        fresh = JSON.parse(found.body);
+        shortId = found.short_id;
+        code = issueCode(store, shortId, { now }).code;
+      } else {
+        fresh = { ...body, time: done.reissue.start, price_kes_total: done.reissue.price_kes_total, reissue_of: id };
+        const p = createProposal(store, PROPOSAL_KIND, fresh, { now });
+        shortId = p.short_id;
+        code = p.code;
+      }
+      const owner_sms = `SAUTI: ${id}: saa ya ziara imebadilika. ${ownerReadback(fresh, shortId, code).replace(/^SAUTI: /, "")}`;
+      store.transaction(() => {
+        store.setKV(OUTCOME_KV + id, { outcome: "needs_owner", reason: "time_changed", reissued_as: shortId, at: now.toISOString() });
+        store.setKV(REISSUE_SMS_KV + id, { reissued_as: shortId, sms: owner_sms, queued: false });
+      });
+      return out({
+        outcome: "needs_owner", reason: "time_changed", reissued_as: shortId, tourist_sms: null,
+        owner_sms, owner_sms_sensitive: true, reissue_of: id,
       });
     }
     case "reject": {
