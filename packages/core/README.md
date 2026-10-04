@@ -114,8 +114,10 @@ const arrived = recordArrival(confirmed.booking, "arrived");       // owner reco
 
 // W3 step 6: Noor said "try" on a card, then dictated the new value
 const change = proposeFactChange({ theme, choice: "try", transcript, current: revision }, sha256);   // value parsed by code from HER words only
-const applied = confirmFactChange({ proposal: change.proposal, transcript: "ndiyo", current: revision, nowMs, session, trusted, clock, tenant_id }, sha256);
-// recomputes the proposal digest and read-back, checks the sheet hash and revision, needs the owner session;
+const renderedDigest = change.proposal.digest;                 // FREEZE this when you speak/show the read-back, like an approval card
+const applied = confirmFactChange({ proposal: change.proposal, renderedDigest, transcript: "ndiyo", current: revision, nowMs, session, trusted, clock, tenant_id }, sha256);
+// recomputes the proposal digest and read-back, requires renderedDigest == proposal.digest (a yes to A can never apply B),
+// checks the sheet hash and revision, needs the owner session;
 // applied.revision + applied.approval + applied.drafts (published:false) are written in ONE transaction
 ```
 

@@ -455,8 +455,20 @@ describe("W3 step 6: owner fact changes come only from Noor's words, apply only 
 
   const confirmArgs = (proposal: ReturnType<typeof proposeFactChange>, extra: Record<string, unknown> = {}) => {
     if (!proposal.ok) throw new Error("fixture");
-    return { proposal: proposal.proposal, transcript: "ndiyo", current: rev1, nowMs: Date.parse(NOW), session: SESSION, trusted: TRUSTED, clock: clockAt(NOW), tenant_id: TENANT, ...extra } as Parameters<typeof confirmFactChange>[0];
+    return { proposal: proposal.proposal, renderedDigest: proposal.proposal.digest, transcript: "ndiyo", current: rev1, nowMs: Date.parse(NOW), session: SESSION, trusted: TRUSTED, clock: clockAt(NOW), tenant_id: TENANT, ...extra } as Parameters<typeof confirmFactChange>[0];
   };
+
+  it("probe (codex A->B race): a yes given to the read-back of proposal A cannot apply a different valid proposal B on the same revision", () => {
+    const a = proposeFactChange({ theme: "price", choice: "try", transcript: "shilingi elfu moja na mia tano", current: rev1 }, sha256);
+    const b = proposeFactChange({ theme: "price", choice: "try", transcript: "shilingi moja", current: rev1 }, sha256);
+    if (!a.ok || !b.ok) throw new Error("fixture");
+    expect(a.proposal.digest).not.toBe(b.proposal.digest);
+    // Noor heard A (the host froze A's digest at read-back); B is handed in for confirmation.
+    const r = confirmFactChange(confirmArgs(b, { renderedDigest: a.proposal.digest }), sha256);
+    expect(r).toMatchObject({ ok: false, reason: "rendered_digest_mismatch" });
+    // and the honest path still works
+    expect(confirmFactChange(confirmArgs(a, { renderedDigest: a.proposal.digest }), sha256)).toMatchObject({ ok: true, applied: { revision: { sheet: { price_per_person_kes: 1500 } } } });
+  });
 
   it("only an explicit yes on the current revision, in a trusted owner session, applies; it writes revision, approval and unpublished drafts together", () => {
     const p = proposeFactChange({ theme: "price", choice: "try", transcript: "shilingi elfu moja na mia tano", current: rev1 }, sha256);

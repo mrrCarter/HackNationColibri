@@ -236,7 +236,7 @@ export interface AppliedFactChange {
 
 export type ConfirmFactChangeResult =
   | { ok: true; applied: AppliedFactChange }
-  | { ok: false; reason: "asr_uncertain" | "no_explicit_yes" | "declined" | "facts_changed" | "proposal_tampered" | "facts_corrupt" | "no_owner_session" | "owner_mismatch" | "device_not_trusted" | "unlock_not_allowed" | "session_revoked" | "session_time_invalid" | "session_stale" | "clock_suspect"; detail: string };
+  | { ok: false; reason: "asr_uncertain" | "no_explicit_yes" | "declined" | "facts_changed" | "proposal_tampered" | "rendered_digest_mismatch" | "facts_corrupt" | "no_owner_session" | "owner_mismatch" | "device_not_trusted" | "unlock_not_allowed" | "session_revoked" | "session_time_invalid" | "session_stale" | "clock_suspect"; detail: string };
 
 /** Recompute what a proposal's digest and read-back must be from its content. */
 export function proposalDigest(p: Pick<FactChangeProposal, "theme" | "field" | "value" | "from_revision" | "from_hash">, sha256: Sha256): string {
@@ -245,15 +245,20 @@ export function proposalDigest(p: Pick<FactChangeProposal, "theme" | "field" | "
 
 /**
  * Noor answers the read-back. Only an explicit yes applies the change, and only
- * if (a) the proposal is byte-for-byte the one that was read back (its digest and
- * read-back recompute from its content), (b) the farm sheet is still the revision
- * the change was proposed against and its hash recomputes, and (c) a trusted owner
+ * if (a) the proposal is byte-for-byte the one that was read back: its digest and
+ * read-back recompute from its content AND equal `renderedDigest`, the digest the
+ * host froze when it actually spoke/showed the read-back (the same binding rule as
+ * decideApproval's renderedDigest, so a second proposal on the same revision cannot
+ * ride on a yes given to the first), (b) the farm sheet is still the revision the
+ * change was proposed against and its hash recomputes, and (c) a trusted owner
  * session is present: a fact change is an owner act like an approval. The host
  * runs this inside the same transaction that writes the bundle.
  */
 export function confirmFactChange(
   input: {
     proposal: FactChangeProposal;
+    /** Digest of the proposal the host read back to Noor, captured at read-back time, not from the proposal passed in. */
+    renderedDigest: string;
     transcript: string;
     asrUncertain?: boolean;
     current: FactRevision;
@@ -272,6 +277,9 @@ export function confirmFactChange(
   const p = input.proposal;
   if (proposalDigest(p, sha256) !== p.digest || readback(p.field, p.value) !== p.readback) {
     return { ok: false, reason: "proposal_tampered", detail: "the proposal's content does not match what was read back; propose again" };
+  }
+  if (input.renderedDigest !== p.digest) {
+    return { ok: false, reason: "rendered_digest_mismatch", detail: "Noor's yes was given to a different read-back than this proposal; read this one back and ask again" };
   }
   const expectedField = fieldForTheme(p.theme);
   if (expectedField !== p.field || !parseDictatedValueShape(p.field, p.value)) {

@@ -155,6 +155,8 @@ export function runFixture(input: Input): Record<string, unknown> {
   const initialSheet = asFarmSheet(input.owner_facts);
   let facts: FactRevision | null = initialSheet ? makeRevision(initialSheet, 1, "w1_setup", FIXTURE_NOW_MS, sha256) : null;
   const factProposals = new Map<string, FactChangeProposal>();
+  /** What the harness "read back" to Noor per theme: the digest frozen at read-back time, as the host must do. */
+  const readBackDigest = new Map<string, string>();
   const factRefusals: Array<{ theme: string; reason: string }> = [];
   const applied: AppliedFactChange[] = [];
   for (const step of input.owner_inputs ?? []) {
@@ -186,8 +188,10 @@ export function runFixture(input: Input): Record<string, unknown> {
         continue;
       }
       const p = proposeFactChange({ theme, choice: choiceByTheme.get(theme) ?? null, transcript: String(step.transcript ?? ""), current: facts }, sha256);
-      if (p.ok) factProposals.set(theme, p.proposal);
-      else factRefusals.push({ theme, reason: p.reason });
+      if (p.ok) {
+        factProposals.set(theme, p.proposal);
+        readBackDigest.set(theme, p.proposal.digest); // the read-back happens here; this is what Noor heard
+      } else factRefusals.push({ theme, reason: p.reason });
     } else if (step.type === "owner_confirms_change") {
       const theme = String(step.card_theme);
       const proposal = factProposals.get(theme);
@@ -195,7 +199,7 @@ export function runFixture(input: Input): Record<string, unknown> {
         factRefusals.push({ theme, reason: "nothing_proposed" });
         continue;
       }
-      const c = confirmFactChange({ proposal, transcript: String(step.transcript ?? ""), asrUncertain: step.asr_uncertain === true, current: facts, nowMs: FIXTURE_NOW_MS, session: FIXTURE_SESSION, trusted: FIXTURE_TRUSTED, clock: FIXTURE_CLOCK, tenant_id: FIXTURE_TENANT }, sha256);
+      const c = confirmFactChange({ proposal, renderedDigest: readBackDigest.get(theme) ?? "", transcript: String(step.transcript ?? ""), asrUncertain: step.asr_uncertain === true, current: facts, nowMs: FIXTURE_NOW_MS, session: FIXTURE_SESSION, trusted: FIXTURE_TRUSTED, clock: FIXTURE_CLOCK, tenant_id: FIXTURE_TENANT }, sha256);
       if (c.ok) {
         // One bundle: revision, approval and drafts are committed together by the host.
         facts = c.applied.revision;
