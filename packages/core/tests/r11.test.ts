@@ -143,6 +143,13 @@ describe("r1.1: one-time approval codes from the enrolled basic phone", () => {
     expect(replay).toMatchObject({ ok: false, reason: "used" });
     const late = verifyApprovalCode({ challenge, action_id: env.action_id, digest: env.digest, code, senderDeviceId: BASIC_PHONE, trusted: HUB_TRUSTED, clock: clockAt("2026-10-04T08:25:00Z"), sessionId: "s3", sha256 });
     expect(late).toMatchObject({ ok: false, reason: "expired" });
+    expect(late.challenge.expired_at).toBe("2026-10-04T08:25:00Z");
+    // codex 2026-10-04: once seen expired, a wall clock turned back must not revive the code (the hub persists the returned challenge)
+    const turnedBack = verifyApprovalCode({ challenge: late.challenge, action_id: env.action_id, digest: env.digest, code, senderDeviceId: BASIC_PHONE, trusted: HUB_TRUSTED, clock: clockAt("2026-10-04T08:11:00Z"), sessionId: "s4", sha256 });
+    expect(turnedBack).toMatchObject({ ok: false, reason: "expired" });
+    // and a clock the host itself flags as suspect (behind its high-water mark) is refused outright
+    const rolledBack = verifyApprovalCode({ challenge, action_id: env.action_id, digest: env.digest, code, senderDeviceId: BASIC_PHONE, trusted: HUB_TRUSTED, clock: clockAt("2026-10-04T08:11:00Z", Date.parse("2026-10-04T08:25:00Z")), sessionId: "s5", sha256 });
+    expect(rolledBack).toMatchObject({ ok: false, reason: "clock_suspect" });
   });
 
   it("Muller 3: the code for proposal A does not approve proposal B", () => {

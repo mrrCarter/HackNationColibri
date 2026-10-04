@@ -45,6 +45,12 @@ export interface CodeChallenge {
   max_attempts: number;
   /** Set when a code was accepted; a second use is refused. */
   used_at: string | null;
+  /**
+   * Set the first time the challenge was SEEN expired. From then on it stays
+   * expired even if the wall clock is turned back (codex, 2026-10-04: a 1 s TTL
+   * refused at T+2 s must not be accepted again at T). The hub persists this.
+   */
+  expired_at: string | null;
 }
 
 export interface IssueCodeInput {
@@ -119,6 +125,7 @@ export function issueApprovalCode(input: IssueCodeInput): { ok: true; code: stri
     attempts: 0,
     max_attempts: maxAttempts,
     used_at: null,
+    expired_at: null,
   };
   return { ok: true, code, challenge };
 }
@@ -174,10 +181,14 @@ export function verifyApprovalCode(input: VerifyCodeInput): VerifyCodeResult {
   if (!input.trusted.trusted_device_ids.has(input.senderDeviceId)) return refuse("device_not_trusted", "reply did not come from the owner's enrolled phone");
   if (!input.trusted.allowed_unlock.has("sms_code")) return refuse("unlock_not_allowed", "this tenant does not allow SMS-code approval");
   if (c.used_at !== null) return refuse("used", `code already used at ${c.used_at}`);
+  if (c.expired_at !== null) return refuse("expired", `code was seen expired at ${c.expired_at}; expiry is permanent`);
   if (c.attempts >= c.max_attempts) return refuse("locked", `challenge locked after ${c.attempts} wrong codes; cancel and re-propose`);
   const expiresAt = parseTimestamp(c.expires_at);
   if (expiresAt === null) return refuse("bad_input", "challenge expires_at is not a timestamp");
-  if (input.clock.effectiveMs >= expiresAt) return refuse("expired", `code expired at ${c.expires_at}`);
+  if (input.clock.effectiveMs >= expiresAt) {
+    // Record the observation so a later, earlier-looking clock cannot revive the code. The hub persists the returned challenge.
+    return refuse("expired", `code expired at ${c.expires_at}`, { ...c, expired_at: formatTimestamp(input.clock.effectiveMs) });
+  }
   if (input.action_id !== c.action_id) return refuse("action_mismatch", "this code was issued for another proposal");
   if (input.digest !== c.digest) return refuse("digest_mismatch", "the proposal changed after the code was sent; a new read-back is needed");
   const typed = input.code.replace(/\s+/g, "");
