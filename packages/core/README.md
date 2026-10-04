@@ -102,12 +102,21 @@ Text inside a source is data. Nothing in this package reads instructions from it
 const sheet = validateFarmSheet(formValues);                      // code-validated; empty fields stay null
 const revision = makeRevision(sheet.sheet, previous.revision + 1, "shamba_screen", nowMs, sha256);
 
-const check = checkCapacity(revision.sheet, confirmedBookings, request);   // missing_fact / closed_day / no_capacity -> ask a person
+const check = checkCapacity(revision.sheet, confirmedBookings, request);   // missing_fact / closed_day / unsupported_time / no_capacity -> ask a person
+// One tour per open day: the slot is the date, every confirmed party shares capacity_per_tour.
 const proposal = proposeBooking({ request, facts: revision, confirmed, tenant_id, action_id, booking_id, created_at_ms, valid_for_ms, preview_text, render_locale }, sha256);
-// Noor approves proposal.envelope through approveExact, then:
-const confirmed = confirmBooking(proposal.booking, approvedEnvelope, revision.sheet, confirmedBookings, isAuthoritativeDevice, nowIso);
+// Noor approves proposal.envelope through approveExact (result.approval is the record), then in the same transaction:
+const confirmed = confirmBooking({ booking: proposal.booking, envelope: result.action.envelope, approval: result.approval, tenant_id, sheet: revision.sheet,
+                                   current_fact_revision: revision.revision, confirmed: confirmedBookings, authoritative: isAuthoritativeDevice, requested_at: nowIso, sha256 });
+// every bound field (tenant, digest, date, start, end, party, price, fact revision) must match or it refuses
 const reply = proposeBookingMessage({ booking: confirmed.booking, template, tenant_id, action_id: uuid(), fact_revision: revision.revision, created_at_ms, valid_for_ms }, sha256); // its own approval
 const arrived = recordArrival(confirmed.booking, "arrived");       // owner record, nothing sent
+
+// W3 step 6: Noor said "try" on a card, then dictated the new value
+const change = proposeFactChange({ theme, choice: "try", transcript, current: revision }, sha256);   // value parsed by code from HER words only
+const applied = confirmFactChange({ proposal: change.proposal, transcript: "ndiyo", current: revision, nowMs, session, trusted, clock, tenant_id }, sha256);
+// recomputes the proposal digest and read-back, checks the sheet hash and revision, needs the owner session;
+// applied.revision + applied.approval + applied.drafts (published:false) are written in ONE transaction
 ```
 
 Owner unlock for all of this is the Sauti PIN session the host establishes (Carter, 2026-10-03 23:48 UTC); the core sees `unlock: "pin"` and refuses anything else.
