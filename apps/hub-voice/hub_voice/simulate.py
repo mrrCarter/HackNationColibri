@@ -1,6 +1,7 @@
 """Offline driver: a transcript in, a blackboard out. No LiveKit, no models, no network.
 
     python -m hub_voice.simulate fixtures/calls/booking_sw.jsonl
+    python -m hub_voice.simulate fixtures/calls/owner_sw.jsonl --owner
 
 Each line is {"role": "caller"|"speaker", "text": "..."}. Caller lines run the
 sidecars exactly as the live agent does; speaker lines are recorded. The
@@ -19,10 +20,10 @@ from .agent import CallState
 from .config import load_settings
 
 
-async def run_file(path: Path) -> CallState:
+async def run_file(path: Path, mode: str = "tourist") -> CallState:
     settings = load_settings()
-    state = CallState(settings, f"sim-{path.stem}")
-    state.board.append("system", "note", {"event": "simulation_start", "file": path.name})
+    state = CallState(settings, f"sim-{path.stem}", mode="owner" if mode == "owner" else "tourist")
+    state.board.append("system", "note", {"event": "simulation_start", "file": path.name, "mode": state.mode})
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -40,7 +41,8 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__)
         return 2
-    state = asyncio.run(run_file(Path(argv[1])))
+    mode = "owner" if "--owner" in argv[2:] else "tourist"
+    state = asyncio.run(run_file(Path(argv[1]), mode))
     print(f"\n{len(state.board.events())} blackboard events -> {state.board.sink_path}")
     return 0
 

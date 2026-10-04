@@ -16,7 +16,7 @@ Max's plan (room #47625) in order: phone and text booking first, GetYourGuide la
                                                └──▶ file_booking_request  (the ONE write: a REQUEST for Noor)
                                                          │
                                                apps/hub (@sauti/core): proposal + read-back SMS to Noor's enrolled phone
-                                               Noor: "NDIYO A 4821" (one-time code) or Sauti PIN in the app
+                                               Noor: "NDIYO A 482193" (one-time code) or Sauti PIN in the app
                                                          │
                                                preparer process: PreparerGate ok? ──▶ click Save. Otherwise never.
 ```
@@ -59,9 +59,17 @@ Model servers (all local): faster-whisper with an OpenAI-compatible `/v1/audio/t
 
 Telephony, after Carter's Twilio and LiveKit setup: inbound via SIP trunk + dispatch rule → `sauti-hub`; outbound calls to Noor (alert clips, read-back) via the LiveKit outbound trunk from the hub; SMS through the hub's Twilio adapter. The hub's F1/F2 (no reply to unknown senders, daily caps) land before the real number is wired.
 
+## Owner mode: Noor calls the farm number herself
+
+Max's plan: the office agent always answers Noor, in her language, for any request. When the caller id's sha256 matches the enrolled owner phone (the hub's `GET /v1/owner/match`; a fixture offline), the same speaker switches to owner mode: it reads her the requests waiting for her (reference, date, party size, source; never visitor names or numbers), summarises visitor feedback from the hub's feedback loop (themes with counts), answers farm questions from the approved facts, and takes her changes ("nitachelewa kidogo", "funga Jumamosi", a message to a visitor) with `propose_change`. Each change is a **proposal** the hub reads back to her enrolled phone with a one-time code, exactly like a tourist's request.
+
+Threat model: a matching caller id selects what the agent talks about, not who it trusts. There is no approve tool in either mode (tested), a spoken "ndiyo, thibitisha" changes nothing (tested), and the number itself is only hashed in memory and never recorded. Someone who fakes Noor's number hears summaries without contact details and can cause, at most, a read-back SMS to her real phone.
+
+Offline: `python -m hub_voice.simulate fixtures/calls/owner_sw.jsonl --owner`.
+
 ## Interfaces this app expects from apps/hub
 
-`GET /v1/availability?date=YYYY-MM-DD` → `{date, capacity, confirmed, remaining, open}` (the core's `checkCapacity`); `GET /v1/farm` → the approved farm sheet; `POST /v1/proposals` with `{tenant_id, source:{channel:"voice", call_id}, booking:{date, party_size, visitor_name, language}, note}` → `{ref, action_id, status:"pending_owner"}`. Bearer token from `HUB_TOKEN`. Until they exist the client answers from `fixtures/` and appends to `runtime/proposals.jsonl`.
+`GET /v1/availability?date=YYYY-MM-DD` → `{date, capacity, confirmed, remaining, open}` (the core's `checkCapacity`); `GET /v1/farm` → the approved farm sheet; owner mode: `GET /v1/owner/match?sha256=` → `{match}`, `GET /v1/proposals?status=pending_owner` → `{pending:[{ref,date,party_size,source,filed_at}]}`, `GET /v1/feedback/summary`, `POST /v1/owner-proposals` → `{ref, action_id, status:"pending_owner"}` (the hub sends the read-back SMS + code); `POST /v1/proposals` with `{tenant_id, source:{channel:"voice", call_id}, booking:{date, party_size, visitor_name, language}, note}` → `{ref, action_id, status:"pending_owner"}`. Bearer token from `HUB_TOKEN`. Until they exist the client answers from `fixtures/` and appends to `runtime/proposals.jsonl`.
 
 The preparer process (codex-mobile, `apps/hub-voice/preparer/**`) implements `PreparerDisplay.prepare(ref, change, banner)` with a headed Playwright browser against a local mock extranet, and calls `PreparerGate.commit(...)` only when the hub reports an approval; the gate is the only path to Save.
 
@@ -70,7 +78,8 @@ The preparer process (codex-mobile, `apps/hub-voice/preparer/**`) implements `Pr
 | File | Owns |
 |---|---|
 | `hub_voice/agent.py` | the livekit-agents worker: session wiring, four speaker tools, event logging; livekit imported lazily |
-| `hub_voice/policy.py` | disclosure, handover lines, the speaker's hard rules |
+| `hub_voice/policy.py` | disclosure, handover lines, the speaker's hard rules; owner-mode instructions |
+| `hub_voice/owner.py` | caller-id normalisation and hashing, owner/tourist classification (any doubt = tourist) |
 | `hub_voice/blackboard.py`, `redact.py` | append-only per-call record, redaction, the speaker view |
 | `hub_voice/sidecars/base.py` | `Turn`, `Advice`, `SidecarContext` (read-only), `run_sidecars` (budget, phases, fail-open) |
 | `hub_voice/sidecars/{language,safety,booking,translation,escalator,preparer}.py` | the six sidecars; `preparer.py` also holds `PreparerGate` and the `PreparerDisplay` port |
