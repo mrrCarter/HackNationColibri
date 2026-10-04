@@ -55,7 +55,7 @@ python -m hub_voice.agent console          # local microphone test, no LiveKit s
 python -m hub_voice.agent dev              # connect to LiveKit; SIP dispatch rule names agent "sauti-hub"
 ```
 
-Model servers (all local): faster-whisper with an OpenAI-compatible `/v1/audio/transcriptions`; llama.cpp or Ollama serving Gemma 4 E4B at `/v1/chat/completions`; a Chatterbox wrapper at `/v1/audio/speech` that accepts model `tts-1` and returns wav or pcm at 24 kHz (the plugin sends `tts-1`; the voice name is yours). With no model URLs configured the worker refuses to speak and says so; use `simulate`.
+Model servers (all local): faster-whisper with an OpenAI-compatible `/v1/audio/transcriptions`; llama.cpp or Ollama serving Gemma 4 E4B at `/v1/chat/completions`, started with `--reasoning off` (or `--reasoning-budget 0`): by default llama.cpp lets Gemma 4 think, spends every token on it and answers with nothing (warden's measurement, room #47669), and the agent and the translation sidecar also ask per request and refuse an empty or thinking-only answer; a Chatterbox wrapper at `/v1/audio/speech` that accepts model `tts-1` and returns wav or pcm at 24 kHz (the plugin sends `tts-1`; the voice name is yours). With no model URLs configured the worker refuses to speak and says so; use `simulate`.
 
 Telephony, after Carter's Twilio and LiveKit setup: inbound via SIP trunk + dispatch rule → `sauti-hub`; outbound calls to Noor (alert clips, read-back) via the LiveKit outbound trunk from the hub; SMS through the hub's Twilio adapter. The hub's F1/F2 (no reply to unknown senders, daily caps) land before the real number is wired.
 

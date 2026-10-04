@@ -241,7 +241,15 @@ async def entrypoint(ctx) -> None:  # noqa: ANN001 - livekit JobContext
         return
 
     stt = openai.STT(base_url=settings.stt_base_url, api_key="local", model=settings.stt_model, language="sw")
-    llm = openai.LLM(base_url=settings.llm_base_url, api_key="local", model=settings.llm_model, temperature=0.2)
+    # Gemma 4 via llama.cpp thinks by default and then answers with nothing (warden #47669). Serve with `--reasoning off`
+    # (or `--reasoning-budget 0`); the request fields below ask for the same per call.
+    llm = openai.LLM(
+        base_url=settings.llm_base_url,
+        api_key="local",
+        model=settings.llm_model,
+        temperature=0.2,
+        extra_body={"reasoning_format": "none", "chat_template_kwargs": {"enable_thinking": False}},
+    )
     tts = openai.TTS(base_url=settings.tts_base_url, api_key="local", model="tts-1", voice=settings.tts_voice, response_format="wav")
     turn_handling: dict[str, Any] = {"interruption": {"enabled": True, "min_words": 0}}
     detector = _turn_detector()
