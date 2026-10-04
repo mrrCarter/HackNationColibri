@@ -18,6 +18,7 @@ import { observeClock } from '@sauti/core';
 import { bytesToHex } from '../crypto/hash';
 import { sha256 as nobleSha256 } from '@noble/hashes/sha256';
 import { getSecureDatabase } from '../storage/secureDatabase';
+import { AsyncMutex } from './asyncMutex';
 
 /** Single-owner demo tenant. One phone = one farm in v1. */
 export const TENANT_ID = 'noor-farm-001';
@@ -26,6 +27,7 @@ const DEVICE_ID_KEY = 'sauti-host.device_id.v1';
 
 type Db = Awaited<ReturnType<typeof getSecureDatabase>>;
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+const approvalTransactionMutex = new AsyncMutex();
 
 /** Host SHA-256 port for @sauti/core: raw bytes in, lowercase hex out. */
 export const sha256 = (bytes: Uint8Array): string => bytesToHex(nobleSha256(bytes));
@@ -170,11 +172,13 @@ export async function approvalStore(): Promise<ApprovalStore> {
   const db = await coreDb();
   return {
     async transaction<T>(fn: (tx: ApprovalTx) => Promise<T>): Promise<T> {
-      let result: T | undefined;
-      await db.transaction(async (tx) => {
-        result = await fn(txAdapter(tx));
+      return approvalTransactionMutex.run(async () => {
+        let result: T | undefined;
+        await db.transaction(async (tx) => {
+          result = await fn(txAdapter(tx));
+        });
+        return result as T;
       });
-      return result as T;
     },
   };
 }
@@ -216,6 +220,13 @@ export async function saveAction(action: StoredAction): Promise<void> {
 export async function listAskedCards(): Promise<Set<string>> {
   const db = await coreDb();
   const rows = (await db.execute("SELECT action_id FROM sauti_audit WHERE event LIKE 'w3_decision_ask_someone:%';")).rows;
+  return new Set(rows.map((r) => String(r.action_id)));
+}
+
+/** Evidence-bound missing-info questions Noor already chose to raise with a person. */
+export async function listAskedQuestions(): Promise<Set<string>> {
+  const db = await coreDb();
+  const rows = (await db.execute("SELECT action_id FROM sauti_audit WHERE event = 'w3_missing_info_ask';")).rows;
   return new Set(rows.map((r) => String(r.action_id)));
 }
 

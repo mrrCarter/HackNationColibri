@@ -1,5 +1,23 @@
 # Codex Mobile lane — Sauti Host
 
+## Warden P0 — offline W3 journey
+
+- [x] Rebase the separate PR #68 handoff on current main and send the exact head/check state to Senti.
+- [x] Inventory mobile routes and pressables; align the first slice to the judged offline feedback → evidence → decision → PIN approval → Outbox journey.
+- [x] Today screen: render a specific, actionable “Muulize mtu” card whenever evidence is insufficient, conflicting, unsupported, or invalid; record that choice durably and restore it for the same evidence digest.
+- [x] Today screen: make in-flight actions single-tap, surface async failures, and add focused regressions for missing-info identity and recorded state.
+- [x] Serialize Mobile `ApprovalStore` transactions with a process-wide mutex; map SQLite busy/constraint conflicts to a visible approval refusal. Core confirms this is the supported deferred-transaction equivalent for the phone process.
+- [ ] Outbox screen: fix retry on a proven failed send, prevent duplicate dispatch from rapid taps, preserve `send_unknown` as held, and test the state transitions in a separate screen PR.
+- [ ] Run Mobile typecheck/lint/tests and report exact commit/checks to Warden/Codex; physical Android evidence remains a separate hardware gate.
+
+### Today screen verification
+
+- `npm test --workspace=@sauti-host/mobile`: 16/16 passed, including stable evidence-bound missing-info IDs, no prompt for supported evidence, one in-flight action per tap key, tap-guard release after an error, approval-mutex ordering, and conflict mapping.
+- `npm run typecheck --workspace=@sauti-host/mobile`: passed.
+- `npm run lint --workspace=@sauti-host/mobile`: passed with no warnings.
+- `git diff --check`: passed.
+- Physical phone and radio-off evidence: not captured on this Windows host.
+
 ## Plan
 
 - [x] Create an isolated checkout and read repository instructions, the supplied build playbook, addendum #47454, and full Mobile packet #47456.
