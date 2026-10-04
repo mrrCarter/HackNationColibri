@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 APP_ROOT = HERE.parent
@@ -30,6 +31,27 @@ def _env_int(name: str, default: int) -> int:
         return int(raw) if raw else default
     except ValueError:
         return default
+
+
+class ConfigError(ValueError):
+    """A setting would break Carter's rule that all AI and the hub run on this PC."""
+
+
+# The only hosts a model or hub URL may name. Not 0.0.0.0, not a LAN address, not a name that merely contains "localhost".
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def require_loopback(name: str, url: str) -> str:
+    """Return the URL if it points at this PC over http(s); raise ConfigError otherwise. Empty = not configured = fine."""
+    if not url:
+        return url
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise ConfigError(f"{name}: must be an http(s) URL on this PC, got {url!r}")
+    host = (parts.hostname or "").lower()
+    if host not in LOOPBACK_HOSTS:
+        raise ConfigError(f"{name}: all AI and the hub run on the hub PC; only 127.0.0.1, localhost or ::1 are allowed, got host {host!r}")
+    return url
 
 
 @dataclass(frozen=True)
@@ -52,6 +74,13 @@ class Settings:
     tenant_id: str = "demo-farm-001"
     runtime_dir: Path = field(default=RUNTIME)
     fixtures_dir: Path = field(default=FIXTURES)
+
+    def __post_init__(self) -> None:
+        # Enforced on every construction, not only on load_settings: no Settings object can carry a remote model or hub URL.
+        require_loopback("SAUTI_STT_BASE_URL", self.stt_base_url)
+        require_loopback("SAUTI_LLM_BASE_URL", self.llm_base_url)
+        require_loopback("SAUTI_TTS_BASE_URL", self.tts_base_url)
+        require_loopback("SAUTI_HUB_BASE_URL", self.hub_base_url)
 
     @property
     def simulated_models(self) -> bool:

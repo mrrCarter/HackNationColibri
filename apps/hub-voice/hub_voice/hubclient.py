@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .config import require_loopback
 from .redact import redact_text
 
 try:  # httpx is only needed against a real hub
@@ -82,7 +83,7 @@ class HubReadOnly:
     """Queries only. No method here changes anything anywhere."""
 
     def __init__(self, base_url: str, token: str, fixtures_dir: Path, timeout_s: float = 1.0) -> None:
-        self._base = base_url.rstrip("/")
+        self._base = require_loopback("SAUTI_HUB_BASE_URL", base_url).rstrip("/")
         self._token = token
         self._fixtures = fixtures_dir
         self._timeout = timeout_s
@@ -149,7 +150,7 @@ class HubReadOnly:
             raise HubError("httpx is not installed")
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
                 r = await client.get(self._base + path, params=params, headers=headers)
         except Exception as exc:  # network errors are reported, never logged with URLs that may carry tokens
             raise HubError(f"hub unreachable: {type(exc).__name__}") from exc
@@ -193,7 +194,7 @@ class HubActions:
     """The writes the speaker may perform: file a booking request, or an owner proposal, for Noor to approve."""
 
     def __init__(self, base_url: str, token: str, runtime_dir: Path, tenant_id: str, timeout_s: float = 3.0, fixtures_dir: Path | None = None) -> None:
-        self._base = base_url.rstrip("/")
+        self._base = require_loopback("SAUTI_HUB_BASE_URL", base_url).rstrip("/")
         self._token = token
         self._runtime = runtime_dir
         self._tenant = tenant_id
@@ -269,7 +270,7 @@ class HubActions:
             raise HubError("httpx is not installed")
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
                 r = await client.post(self._base + path, json=body, headers=headers)
         except Exception as exc:
             raise HubError(f"hub unreachable: {type(exc).__name__}") from exc
