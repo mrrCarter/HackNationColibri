@@ -62,14 +62,24 @@ def test_http_clients_never_follow_redirects_or_read_proxy_env() -> None:
 
 @pytest.mark.parametrize(
     "url",
-    ["http://user:s3cr3t@127.0.0.1:8080/v1", "http://token-abc@localhost/v1", "http://[::1/v1", "http://[zz::1]:8080/v1", "http://:@127.0.0.1/v1"],
-    ids=["basic-auth", "bare-user", "unclosed-bracket", "bad-ipv6", "empty-auth"],
+    [
+        "http://user:s3cr3t@127.0.0.1:8080/v1",
+        "http://token-abc@localhost/v1",
+        "http://[::1/v1",
+        "http://[zz::1]:8080/v1",
+        "http://:@127.0.0.1/v1",
+        "http://127.0.0.1:synthetic-secret-marker/v1",
+        "http://127.0.0.1:99999/v1",
+        "http://127.0.0.1:/v1",
+        "http://[::1]:marker/v1",
+    ],
+    ids=["basic-auth", "bare-user", "unclosed-bracket", "bad-ipv6", "empty-auth", "text-port", "port-out-of-range", "empty-port", "ipv6-text-port"],
 )
 def test_credentialed_or_malformed_urls_fail_closed_without_echoing_anything(url: str) -> None:
     with pytest.raises(ConfigError) as info:
         require_loopback("SAUTI_HUB_BASE_URL", url)
     msg = str(info.value)
-    for secret in ("s3cr3t", "token-abc", "127.0.0.1", "localhost", "zz::1", "[", "ValueError"):
+    for secret in ("s3cr3t", "token-abc", "127.0.0.1", "localhost", "zz::1", "[", "ValueError", "synthetic-secret-marker", "marker", "99999"):
         assert secret not in msg, msg
     assert msg.startswith("SAUTI_HUB_BASE_URL: ")
     assert info.value.__cause__ is None  # parser details suppressed

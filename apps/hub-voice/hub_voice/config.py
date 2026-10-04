@@ -52,8 +52,11 @@ def require_loopback(name: str, url: str) -> str:
     try:
         parts = urlsplit(url)
         host = (parts.hostname or "").lower()  # raises ValueError on a malformed bracket host
+        port = parts.port  # raises ValueError on a non-numeric or out-of-range port (codex: the SDK would echo it otherwise)
     except ValueError:
         raise ConfigError(f"{name}: not a valid URL") from None
+    if port is None and ":" in parts.netloc.rsplit("]", 1)[-1]:
+        raise ConfigError(f"{name}: not a valid URL")  # "host:" with an empty port
     if parts.scheme not in ("http", "https") or not parts.netloc:
         raise ConfigError(f"{name}: must be an http(s) URL on this PC")
     if parts.username is not None or parts.password is not None:
