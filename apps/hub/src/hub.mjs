@@ -16,7 +16,7 @@ import { applyBookingEvent } from "./bookings.mjs";
 import { handleOwnerSms, proposalDigest } from "./commands.mjs";
 import {
   dueFeedbackRequests, executeApprovedFeedbackRequest, ingestFeedbackReply, KIND as FEEDBACK_REQUEST,
-  proposeFeedbackRequest, queuePainPointDigest,
+  proposeFeedbackRequest, queuePainPointDigest, sendFeedbackRequestNow,
 } from "./feedback/index.mjs";
 import { gygApiSource, platformMailSource } from "./intake/platforms.mjs";
 import { smsBatchToEvents } from "./intake/sms.mjs";
@@ -100,13 +100,15 @@ export function storedApprovalVerifier(store) {
  *           limits?: object }} deps
  *   tagger: Max's tagFeedback (contrib/max/tagger), injected so the hub does not depend on contrib; without it the
  *   pain-point digest is not built. translator: optional local MT for Noor's suggestions (booking_requests.mjs).
+ *   autoFeedback: send the fixed after-visit question without Noor's approval (Max's demo choice; default false
+ *   keeps the approval step).
  *   alertCalls: where owner-alert calls go, notify.ALERT_CALL_MODES: "pull" (default, listed for hub-voice at
  *   GET /v1/owner-alerts/pending), "twilio" (legacy outbox call item), "off". alertClipKeys: the playable clip keys
  *   (default: notify.PLAYABLE_KEYS, status RECORDED only).
  */
 export function createHub({
   store, sheet, outbox, adapters = platformAdapters(), sources = [], now = () => new Date(),
-  tagger = null, translator = null, limits = {}, alertCalls = "pull", alertClipKeys = undefined,
+  tagger = null, translator = null, limits = {}, autoFeedback = false, alertCalls = "pull", alertClipKeys = undefined,
 }) {
   const lim = { ...HUB_LIMITS, ...limits };
   const verify = storedApprovalVerifier(store);
@@ -207,8 +209,17 @@ export function createHub({
    */
   function feedbackTick() {
     const proposed = [];
+    const sent = [];
     const ownerPhone = owner();
-    if (ownerPhone) {
+    if (autoFeedback) {
+      // Automatic mode: the fixed question goes straight to each visitor after the visit (no read-back to Noor).
+      for (const b of dueFeedbackRequests(store, { now: now() })) {
+        const r = sendFeedbackRequestNow(store, outbox, b, { now: now() });
+        if (!r.ok) continue;
+        record("feedback_request_sent", { booking_id: b.booking_id, language: r.language });
+        sent.push(b.booking_id);
+      }
+    } else if (ownerPhone) {
       for (const b of dueFeedbackRequests(store, { now: now() })) {
         if (store.getKV(FEEDBACK_PROPOSED_KV + b.booking_id)) continue;
         const p = proposeFeedbackRequest(store, b, { now: now() });
@@ -220,7 +231,7 @@ export function createHub({
     }
     const digest = tagger ? queuePainPointDigest(store, outbox, tagger, { now: now() }) : null;
     if (digest) record("feedback_digest", { id: digest.key.slice(0, 16), cards: digest.cards });
-    return { proposed, digest: digest ? { cards: digest.cards } : null };
+    return { proposed, sent, digest: digest ? { cards: digest.cards } : null };
   }
 
   /** Pull every source once, process new events, run the feedback step, then send what is queued. */
@@ -338,9 +349,15 @@ export function createHub({
       return { command: "query", query: q.query, reply_sent: Boolean(n), executed: null };
     }
     const r = handleOwnerSms(store, sms, { now: now() });
-    if (r.reply && r.recipient) {
-      outbox.enqueue({ channel: "sms", recipient: r.recipient, body: r.reply, cause_id: `reply:${now().toISOString()}`, sensitive: r.sensitive });
-    }
+    const ack = r.reply && r.recipient
+      ? { channel: "sms", recipient: r.recipient, body: r.reply, cause_id: `reply:${now().toISOString()}`, sensitive: r.sensitive }
+      : null;
+    // NDIYO on a booking request: "Sawa. A imeidhinishwa. Mgeni atapata uthibitisho." is sent only once the booking is
+    // really written. If the day filled up or closed meanwhile (or the tour time changed), decideBookingRequest already
+    // tells Noor why and no confirmation goes out: the generic acknowledgement would contradict it (demo:check, the
+    // capacity race). A crash before it is queued loses only this acknowledgement; recover() still books and confirms.
+    const deferAck = r.command?.type === "approve" && r.command.kind === BOOKING_REQUEST;
+    if (ack && !deferAck) outbox.enqueue(ack);
     let relayed = null;
     if (r.command?.type === "suggest") {
       // Noor's words to the tourist ("A 482113 nitachelewa kidogo"): the code was checked, not spent.
@@ -349,6 +366,10 @@ export function createHub({
     if (r.command && r.command.type !== "approve") record(`owner_${r.command.type}`, { proposal_id: r.command.proposal_id, kind: r.command.kind });
     // The command object never drives execution: only proposals stored as approved (or declined) do.
     const executed = await runApproved();
+    if (ack && deferAck) {
+      const mine = executed.find((e) => e.proposal_id === r.command.proposal_id);
+      if (!(typeof mine?.outcome === "string" && mine.outcome !== "confirmed")) outbox.enqueue(ack);
+    }
     await outbox.dispatch();
     return { command: r.command?.type ?? null, reply_sent: Boolean(r.reply), executed: executed[0] ?? null, ...(relayed ? { relayed } : {}) };
   }

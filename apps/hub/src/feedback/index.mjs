@@ -12,7 +12,8 @@ export const KIND = "feedback_request";
 const REQUESTED_KV = "feedback.requested.";     // + booking_id -> { phone, proposal_id, sent_at }
 const PENDING_PHONE_KV = "feedback.pending.";   // + normalized phone -> { booking_id, until }
 const SOURCES_KV = "feedback.sources";          // [{ id, from_booking, text, lang, received_at }]
-const DIGEST_KV = "feedback.last_digest";       // digest hash of the last report sent to Noor
+const DIGEST_KV = "feedback.last_digest";
+const SUMMARY_KV = "feedback.last_summary";            // = owner_queries.mjs FEEDBACK_KV       // digest hash of the last report sent to Noor
 const REPLY_WINDOW_MS = 14 * 24 * 3600_000;
 const SUPPORTED = new Set(["sw", "en", "de", "fr"]);
 const EAT_OFFSET_MS = 3 * 3600_000;
@@ -26,10 +27,10 @@ export const THEME_SW = Object.freeze({
 
 /** Fixed request texts in the tourist's language (UNREVIEWED). No numbers, no facts: nothing to invent. */
 export const REQUEST_TEXT = Object.freeze({
-  en: (name) => `Hello ${name}, thank you for visiting Noor's coffee farm. What did you like, and what could be better? Just reply to this message.`,
+  en: (name) => `Hello${name ? ` ${name}` : ""}, thank you for visiting Noor's coffee farm. What did you like, and what could be better? Just reply to this message.`,
   sw: (name) => `Habari ${name}, asante kwa kutembelea shamba la kahawa la Noor. Ulipenda nini, na nini kingeweza kuwa bora? Jibu ujumbe huu tu.`,
-  de: (name) => `Hallo ${name}, danke fuer Ihren Besuch auf Noors Kaffeefarm. Was hat Ihnen gefallen, was koennte besser sein? Antworten Sie einfach auf diese Nachricht.`,
-  fr: (name) => `Bonjour ${name}, merci pour votre visite de la ferme de cafe de Noor. Qu'avez-vous aime, et que pourrions-nous ameliorer ? Repondez simplement a ce message.`,
+  de: (name) => `Hallo${name ? ` ${name}` : ""}, danke fuer Ihren Besuch auf Noors Kaffeefarm. Was hat Ihnen gefallen, was koennte besser sein? Antworten Sie einfach auf diese Nachricht.`,
+  fr: (name) => `Bonjour${name ? ` ${name}` : ""}, merci pour votre visite de la ferme de cafe de Noor. Qu'avez-vous aime, et que pourrions-nous ameliorer ? Repondez simplement a ce message.`,
 });
 
 const eatDate = (now) => new Date(now.getTime() + EAT_OFFSET_MS).toISOString().slice(0, 10);
@@ -63,12 +64,37 @@ export function dueFeedbackRequests(store, { now = new Date() } = {}) {
  * Prepare the request as a proposal. Returns the read-back SMS for Noor (carries the one-time code: enqueue it
  * with { sensitive: true }). Nothing is sent to the tourist here.
  */
-export function proposeFeedbackRequest(store, booking, opts = {}) {
+/** The fixed request for one visit: who, in which language, which text. Null without an SMS contact. */
+function requestFor(store, booking) {
   const phone = contactPhone(store, booking);
-  if (!phone) throw new Error("booking has no SMS contact");
+  if (!phone) return null;
   const lang = SUPPORTED.has(booking.request.contact.language) ? booking.request.contact.language : "en";
-  const name = firstName(booking.request.visitor_name) || (lang === "sw" ? "mgeni" : "there");
-  const change = { booking_id: booking.booking_id, recipient: `+${phone}`, language: lang, body: REQUEST_TEXT[lang](name) };
+  // No name known: "Habari mgeni" in Swahili, no filler word elsewhere ("Hallo there" was English inside German).
+  const name = firstName(booking.request.visitor_name) || (lang === "sw" ? "mgeni" : "");
+  return { phone, change: { booking_id: booking.booking_id, recipient: `+${phone}`, language: lang, body: REQUEST_TEXT[lang](name) } };
+}
+
+/**
+ * Automatic mode (Max, 2026-10-04: "there should not be a request confirmation for Noor, it should be automatic").
+ * The fixed question goes to the visitor without Noor's approval: a template with no facts and no commitment, like
+ * the booking acknowledgement, sent once per visit and only to the number that booked by SMS. Replies are still
+ * only data. Crash-safe: the outbox dedupes the same (recipient, body, cause), and the visit is marked asked last.
+ */
+export function sendFeedbackRequestNow(store, outbox, booking, { now = new Date() } = {}) {
+  if (store.getKV(REQUESTED_KV + booking.booking_id) !== null) return { ok: false, reason: "already_requested" };
+  const req = requestFor(store, booking);
+  if (!req) return { ok: false, reason: "no_sms_contact" };
+  const { phone, change } = req;
+  const q = outbox.enqueue({ channel: "sms", recipient: change.recipient, body: change.body, cause_id: `feedback:${change.booking_id}` });
+  store.setKV(PENDING_PHONE_KV + phone, { booking_id: change.booking_id, language: change.language, until: new Date(now.getTime() + REPLY_WINDOW_MS).toISOString() });
+  store.setKV(REQUESTED_KV + change.booking_id, { phone: change.recipient, proposal_id: "auto", queued_at: now.toISOString() });
+  return { ok: true, key: q.key, language: change.language };
+}
+
+export function proposeFeedbackRequest(store, booking, opts = {}) {
+  const req = requestFor(store, booking);
+  if (!req) throw new Error("booking has no SMS contact");
+  const { change } = req;
   const p = createProposal(store, KIND, change, opts);
   // Which visit: Noor may get several of these the same day, so name the day and the party size (never a number).
   const who = firstName(booking.request.visitor_name) || "mgeni";
@@ -202,5 +228,7 @@ export function queuePainPointDigest(store, outbox, tagger, { now = new Date() }
   if (!fresh) return null;
   const q = outbox.enqueue({ channel: "sms", recipient: owner, body: sms, cause_id: eventId });
   store.setKV(DIGEST_KV, digest);
+  // Noor's MAONI query (owner_queries.mjs FEEDBACK_KV) answers with the latest digest.
+  store.setKV(SUMMARY_KV, { text_sw: sms.replace(/^SAUTI: /, ""), at: now.toISOString() });
   return { sms, key: q.key, cards: report.cards.length };
 }
