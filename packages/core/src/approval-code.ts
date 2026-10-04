@@ -6,7 +6,8 @@
  * ("Jibu NDIYO B 482193"). The code is random, never stored (only a
  * domain-separated hash bound to tenant, action, content digest and challenge),
  * single-use, expiring, with a lockout. A verified code mints an
- * AuthenticatedSession with unlock "sms_code" that is bound to that one action;
+ * AuthenticatedSession with unlock "sms_code" that is bound to that one action
+ * AND the exact digest it read back (same id, changed content = fresh code);
  * decideApproval refuses it for any other action, and the hub revokes it after
  * the decision.
  *
@@ -212,6 +213,7 @@ export function verifyApprovalCode(input: VerifyCodeInput): VerifyCodeResult {
     session_id: input.sessionId,
     authenticated_at: now,
     bound_action_id: c.action_id,
+    bound_digest: c.digest,
     challenge_id: c.challenge_id,
   };
   return { ok: true, challenge: used, session };

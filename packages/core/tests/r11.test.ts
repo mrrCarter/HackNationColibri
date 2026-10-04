@@ -101,7 +101,7 @@ describe("r1.1: one-time approval codes from the enrolled basic phone", () => {
     expect(verified.ok, JSON.stringify(verified)).toBe(true);
     if (!verified.ok) return;
     expect(verified.challenge.used_at).toBe("2026-10-04T08:12:00Z");
-    expect(verified.session).toMatchObject({ unlock: "sms_code", device_id: BASIC_PHONE, bound_action_id: env.action_id, challenge_id: "challenge-0001", owner_id: "demo-noor-001" });
+    expect(verified.session).toMatchObject({ unlock: "sms_code", device_id: BASIC_PHONE, bound_action_id: env.action_id, bound_digest: env.digest, challenge_id: "challenge-0001", owner_id: "demo-noor-001" });
 
     const store = new MemoryStore();
     store.trusted = HUB_TRUSTED;
@@ -212,6 +212,18 @@ describe("r1.1: one-time approval codes from the enrolled basic phone", () => {
     const rejectA = decideRejection(storedAction(a), v.session, HUB_TRUSTED, clockAt("2026-10-04T08:11:00Z"), "22222222-3333-4444-8555-666666666669");
     expect(rejectA.ok).toBe(true);
     if (rejectA.ok) expect(rejectA.approval.schema_version).toBe("1.1.0");
+    // codex (2026-10-04): the SAME action id with changed content is another envelope; the code approved A's bytes, not B's
+    const sameIdNewContent = sealEnvelope({ ...(({ digest: _d, ...rest }) => rest)(a), payload: { ...a.payload, body: a.payload.body + " Bei imeongezeka." } }, sha256);
+    expect(sameIdNewContent.ok).toBe(true);
+    if (sameIdNewContent.ok) {
+      expect(sameIdNewContent.value.action_id).toBe(a.action_id);
+      const swapped = decideApproval({ action: storedAction(sameIdNewContent.value), renderedDigest: sameIdNewContent.value.digest, currentFactRevision: 1, session: v.session, trusted: HUB_TRUSTED, clock: clockAt("2026-10-04T08:11:00Z"), approvalId: "22222222-3333-4444-8555-666666666668", sha256 });
+      expect(swapped).toMatchObject({ ok: false, reason: "session_bound_elsewhere" });
+      expect(decideRejection(storedAction(sameIdNewContent.value), v.session, HUB_TRUSTED, clockAt("2026-10-04T08:11:00Z"), "22222222-3333-4444-8555-666666666669")).toMatchObject({ ok: false, reason: "session_bound_elsewhere" });
+    }
+    const noDigest: AuthenticatedSession = { ...v.session };
+    delete (noDigest as Partial<AuthenticatedSession>).bound_digest;
+    expect(decideApproval({ action: storedAction(a), renderedDigest: a.digest, currentFactRevision: 1, session: noDigest, trusted: HUB_TRUSTED, clock: clockAt("2026-10-04T08:11:00Z"), approvalId: "22222222-3333-4444-8555-666666666668", sha256 })).toMatchObject({ ok: false, reason: "session_malformed" });
     const malformed: AuthenticatedSession = { ...v.session, bound_action_id: undefined as unknown as string };
     delete (malformed as Partial<AuthenticatedSession>).bound_action_id;
     expect(decideApproval({ action: storedAction(a), renderedDigest: a.digest, currentFactRevision: 1, session: malformed, trusted: HUB_TRUSTED, clock: clockAt("2026-10-04T08:11:00Z"), approvalId: "22222222-3333-4444-8555-666666666668", sha256 })).toMatchObject({ ok: false, reason: "session_malformed" });

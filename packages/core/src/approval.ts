@@ -52,6 +52,8 @@ export interface AuthenticatedSession {
   authenticated_at: string;
   /** r1.1: a session that may act on ONE action only (sms_code). Any other action is refused. */
   bound_action_id?: string;
+  /** r1.1: the exact envelope digest the owner read back and answered. Same action id with changed content is refused (codex, 2026-10-04). */
+  bound_digest?: string;
   /** r1.1, sms_code: the one-time-code challenge that minted this session. */
   challenge_id?: string;
 }
@@ -184,13 +186,16 @@ export type SessionFailure = Extract<ApprovalFailure, "no_owner_session" | "owne
  * the caller is about to act on: a bound session (sms_code) is good for that
  * one action only, and for nothing when the caller names none.
  */
-export function checkOwnerSession(tenantId: string, session: AuthenticatedSession | null, trusted: TrustedOwner | null, clock: ClockReading, actionId?: string): { ok: true } | { ok: false; reason: SessionFailure; detail: string } {
+export function checkOwnerSession(tenantId: string, session: AuthenticatedSession | null, trusted: TrustedOwner | null, clock: ClockReading, actionId?: string, envelopeDigest?: string): { ok: true } | { ok: false; reason: SessionFailure; detail: string } {
   if (!session) return { ok: false, reason: "no_owner_session", detail: "nobody is unlocked on this device" };
-  if (session.unlock === "sms_code" && (session.bound_action_id === undefined || session.challenge_id === undefined)) {
-    return { ok: false, reason: "session_malformed", detail: "an sms_code session must be bound to one action and name its challenge" };
+  if (session.unlock === "sms_code" && (session.bound_action_id === undefined || session.bound_digest === undefined || session.challenge_id === undefined)) {
+    return { ok: false, reason: "session_malformed", detail: "an sms_code session must be bound to one action AND its digest, and name its challenge" };
   }
   if (session.bound_action_id !== undefined && session.bound_action_id !== actionId) {
     return { ok: false, reason: "session_bound_elsewhere", detail: `session is bound to action ${session.bound_action_id}` };
+  }
+  if (session.bound_digest !== undefined && session.bound_digest !== envelopeDigest) {
+    return { ok: false, reason: "session_bound_elsewhere", detail: "session is bound to the content the owner read back; this envelope has different content, so it needs a fresh read-back and code" };
   }
   if (!trusted) return { ok: false, reason: "owner_mismatch", detail: "no trusted owner registered for this tenant" };
   if (trusted.tenant_id !== tenantId || session.tenant_id !== tenantId) return { ok: false, reason: "owner_mismatch", detail: "session or registry is for another tenant" };
@@ -243,7 +248,7 @@ export function decideApproval(input: ApproveInput): ApproveResult {
   }
   if (clock.suspect) return fail("clock_suspect", "device clock is behind its own high-water mark; approval held");
   if (isExpired(env.valid_until, clock.effectiveMs)) return fail("expired", `valid_until ${env.valid_until} has passed`);
-  const who = checkOwnerSession(env.tenant_id, session, trusted, clock, env.action_id);
+  const who = checkOwnerSession(env.tenant_id, session, trusted, clock, env.action_id, env.digest);
   if (!who.ok) return fail(who.reason, who.detail);
 
   const decidedAt = formatTimestamp(clock.effectiveMs);
@@ -328,7 +333,7 @@ export type RejectResult = { ok: true; action: StoredAction; approval: ApprovalR
 export function decideRejection(action: StoredAction, session: AuthenticatedSession | null, trusted: TrustedOwner | null, clock: ClockReading, approvalId: string, confirmation?: Confirmation): RejectResult {
   if (action.business !== "proposed") return fail("not_proposed", `business state is ${action.business}`) as RejectResult;
   const env = action.envelope;
-  const who = checkOwnerSession(env.tenant_id, session, trusted, clock, env.action_id);
+  const who = checkOwnerSession(env.tenant_id, session, trusted, clock, env.action_id, env.digest);
   if (!who.ok) return fail(who.reason, who.detail) as RejectResult;
   return {
     ok: true,
@@ -405,7 +410,7 @@ export async function revokeExact(store: ApprovalStore, req: RevokeExactRequest)
     if (!action) return { ok: false, reason: "invalid_envelope", detail: `no action ${req.actionId}` };
     const tenantId = action.envelope.tenant_id;
     const [trusted, session] = await Promise.all([tx.getTrustedOwner(tenantId), tx.getOwnerSession(tenantId)]);
-    const who = checkOwnerSession(tenantId, session, trusted, req.clock, req.actionId);
+    const who = checkOwnerSession(tenantId, session, trusted, req.clock, req.actionId, action.envelope.digest);
     if (!who.ok) {
       await tx.appendAudit({ at: formatTimestamp(req.clock.effectiveMs), action_id: req.actionId, event: "revocation_refused", detail: `${who.reason}: ${who.detail}` });
       return { ok: false, reason: who.reason, detail: who.detail };
