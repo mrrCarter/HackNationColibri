@@ -60,7 +60,7 @@ class TranslationSidecar:
             "Output only the translation. Keep every number exactly as written; do not add numbers, names or facts.\n\n" + turn.text
         )
         body = {"model": ctx.settings.llm_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0, "max_tokens": 200, **NO_REASONING_REQUEST}
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False, trust_env=False) as client:
             r = await client.post(base.rstrip("/") + "/chat/completions", json=body)
         if r.status_code != 200:
             return None

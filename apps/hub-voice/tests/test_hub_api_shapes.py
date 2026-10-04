@@ -11,7 +11,7 @@ from hub_voice.agent import REFUSAL_LINES, CallState, refusal_line
 from hub_voice.config import FIXTURES, Settings
 from hub_voice.hubclient import Availability, BookingRequest, FiledRequest, FilingRefused, HubActions, HubError, HubReadOnly
 
-LIVE = "http://hub.invalid:1"
+LIVE = "http://127.0.0.1:1"  # loopback is the only host Settings and the clients accept; _post is replaced below
 
 
 def live_actions(status: int, body, seen: list | None = None) -> HubActions:  # noqa: ANN001

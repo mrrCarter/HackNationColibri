@@ -19,7 +19,7 @@ from hub_voice.hubclient import HubError, HubReadOnly
 from hub_voice.owner import classify_caller, number_hash
 
 OWNER = "+254700000002"
-LIVE = "http://hub.invalid:1"  # non-empty base_url = live path; _get is replaced below, nothing is ever contacted
+LIVE = "http://127.0.0.1:1"  # non-empty base_url = live path (loopback is the only host accepted); _get is replaced below, nothing is ever contacted
 
 
 def live_client(responder) -> HubReadOnly:  # noqa: ANN001

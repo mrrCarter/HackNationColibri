@@ -18,7 +18,7 @@ httpx = pytest.importorskip("httpx")
 
 
 def ctx_with_llm() -> SidecarContext:
-    settings = Settings(fixtures_dir=FIXTURES, llm_base_url="http://llm.invalid:1/v1", llm_model="gemma-4-e4b-it")
+    settings = Settings(fixtures_dir=FIXTURES, llm_base_url="http://127.0.0.1:1/v1", llm_model="gemma-4-e4b-it")
     board = Blackboard("tr")
     return SidecarContext(settings=settings, hub=HubReadOnly("", "", FIXTURES), board=board, now_ms=0, call_id="tr")
 
