@@ -101,11 +101,15 @@ class HubReadOnly:
         """Does this caller-id hash belong to the tenant's enrolled owner phone? Selects owner MODE only; grants nothing."""
         if not re.fullmatch(r"[0-9a-f]{64}", caller_sha256):
             return False
-        if self.simulated:
-            owner = json.loads((self._fixtures / "owner.json").read_text(encoding="utf-8"))
-            return owner.get("enrolled_number_sha256") == caller_sha256
-        data = await self._get("/v1/owner/match", {"sha256": caller_sha256})
-        return bool(data.get("match"))
+        try:
+            if self.simulated:
+                owner = json.loads((self._fixtures / "owner.json").read_text(encoding="utf-8"))
+                return owner.get("enrolled_number_sha256") == caller_sha256
+            data = await self._get("/v1/owner/match", {"sha256": caller_sha256})
+        except Exception:  # noqa: BLE001 - any doubt (unreachable, timeout, bad JSON, bad status) is NOT the owner
+            return False
+        # Only a literal JSON true counts. "true", 1, "yes", a missing key or a non-object are all NOT the owner.
+        return isinstance(data, dict) and data.get("match") is True
 
     async def pending_requests(self) -> list[dict[str, Any]]:
         """Requests waiting for Noor: refs, dates, party sizes, source. Never visitor names or numbers."""

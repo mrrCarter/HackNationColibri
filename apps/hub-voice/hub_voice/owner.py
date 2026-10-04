@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from .hubclient import HubError, HubReadOnly
+from .hubclient import HubReadOnly
 
 Mode = Literal["tourist", "owner"]
 
@@ -59,9 +59,11 @@ async def classify_caller(raw_caller_id: str | None, hub: HubReadOnly) -> Caller
         return CallerClassification("tourist", "no_caller_id")
     try:
         matched = await hub.owner_match(number_hash(number))
-    except HubError as exc:
+    except Exception as exc:  # noqa: BLE001 - a lookup that fails in any way is a tourist call
         return CallerClassification("tourist", f"owner_lookup_failed:{type(exc).__name__}")
-    return CallerClassification("owner", "enrolled_number_hash") if matched else CallerClassification("tourist", "not_enrolled")
+    if matched is not True:  # only a literal True from the hub client; never truthiness
+        return CallerClassification("tourist", "not_enrolled")
+    return CallerClassification("owner", "enrolled_number_hash")
 
 
 OWNER_CHANGE_KINDS = ("running_late", "close_day", "open_day", "capacity", "message_to_visitor", "other")
