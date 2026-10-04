@@ -157,12 +157,17 @@ REFUSAL_LINES: dict[str, str] = {
     "hours": "Samahani, muda huo haupo ndani ya saa za shamba. / Sorry, that time is outside the farm's hours.",
     "too_late": "Samahani, ni kuchelewa mno kwa siku hiyo. Siku nyingine? / Sorry, it is too late for that day. Another day?",
     "budget_exhausted": "Samahani, leo siwezi kutuma ombi lingine; mtu atakupigia. / Sorry, I cannot file another request today; a person will call you back.",
+    # Nat O3 / warden routing (2026-10-04): a group larger than one tour gets a person, not "another day": no day will fit.
+    "group_exceeds_capacity": "Samahani, kikundi ni kikubwa kuliko ziara moja{cap}. Mtu atakupigia kupanga ziara ya kikundi. / Sorry, the group is larger than one tour{cap_en}; a person will call you to arrange a group visit.",
 }
 
 
 def refusal_line(outcome: FilingRefused, owner: bool = False) -> str:
     if outcome.reason in REFUSAL_LINES:
-        return REFUSAL_LINES[outcome.reason]
+        cap = outcome.facts.get("capacity") if isinstance(outcome.facts, dict) else None
+        cap_sw = f" (watu {cap} kwa ziara)" if isinstance(cap, int) and cap > 0 else ""
+        cap_en = f" ({cap} people per tour)" if isinstance(cap, int) and cap > 0 else ""
+        return REFUSAL_LINES[outcome.reason].replace("{cap}", cap_sw).replace("{cap_en}", cap_en)
     if outcome.status == "invalid":
         return "Samahani, sikuelewa vizuri. Tuseme tena tarehe na idadi ya watu. / Sorry, I did not get that right. Let us say the date and the number of people again." if not owner else "Samahani, sikuelewa vizuri. Tuseme tena. / Sorry, I did not get that right. Let us say it again."
     # needs_owner (429/503) and anything unknown: no retry on the call, a person follows up.

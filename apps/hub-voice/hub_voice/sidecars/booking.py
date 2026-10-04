@@ -130,6 +130,9 @@ class BookingSidecar:
                     parts.append(f"{facts['date']}: farm CLOSED that day; offer the nearest open day")
                 elif av.remaining <= 0:
                     parts.append(f"{facts['date']}: FULL (0 of {av.capacity} left); offer another day")
+                elif "party_size" in facts and facts["party_size"] > av.capacity:
+                    # No day will fit a group larger than one tour: offer a person, not another day (Nat O3).
+                    parts.append(f"{facts['date']}: the group ({facts['party_size']}) is LARGER than one tour ({av.capacity}); say so and offer that a person calls back to arrange a group visit; do not offer another day")
                 elif "party_size" in facts and facts["party_size"] > av.remaining:
                     parts.append(f"{facts['date']}: only {av.remaining} of {av.capacity} seats left, party is {facts['party_size']}; offer a smaller group or another day")
                 else:

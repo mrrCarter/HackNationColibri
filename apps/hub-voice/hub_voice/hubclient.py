@@ -307,13 +307,17 @@ class HubActions:
             data = None
         return r.status_code, data
 
-    async def _simulated_availability_check(self, req: BookingRequest) -> FilingRefused | None:
-        """Offline twin of the hub's 409: a closed or full day is refused the way the hub would refuse it."""
+    async def _simulated_availability_check(self, req: BookingRequest, today: str | None = None) -> FilingRefused | None:
+        """Offline twin of the hub's 409: a past, closed or full day, or a group larger than one tour, is refused the way the hub refuses it."""
         if self._fixtures is None:
             return None
+        if req.date < (today or time.strftime("%Y-%m-%d")):
+            return FilingRefused("unavailable", "past", {"date": req.date})
         av = await HubReadOnly("", "", self._fixtures).availability(req.date)
         if not av.open:
             return FilingRefused("unavailable", av.reason or "day_closed", av.as_dict())
+        if req.party_size > av.capacity:
+            return FilingRefused("unavailable", "group_exceeds_capacity", av.as_dict())
         if av.remaining < req.party_size:
             return FilingRefused("unavailable", "full", av.as_dict())
         return None

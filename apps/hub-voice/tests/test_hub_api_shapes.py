@@ -106,9 +106,15 @@ def test_simulated_twin_refuses_full_and_closed_days_like_the_hub(tmp_path) -> N
     assert isinstance(full, FilingRefused) and full.reason == "full"
     closed = asyncio.run(a.file_booking_request(BookingRequest(date="2026-10-12", party_size=1, visitor_name="A", language="sw"), "c"))
     assert isinstance(closed, FilingRefused) and closed.status == "unavailable"
+    huge = asyncio.run(a.file_booking_request(BookingRequest(date="2026-10-10", party_size=11, visitor_name="A", language="sw"), "c"))
+    assert isinstance(huge, FilingRefused) and huge.reason == "group_exceeds_capacity" and huge.facts["capacity"] == 10
+    assert "kikundi ni kikubwa" in refusal_line(huge) and "(10 people per tour)" in refusal_line(huge) and "another day" not in refusal_line(huge).lower()
+    past = asyncio.run(a.file_booking_request(BookingRequest(date="2026-01-01", party_size=1, visitor_name="A", language="sw"), "c"))
+    assert isinstance(past, FilingRefused) and past.reason == "past"
     ok = asyncio.run(a.file_booking_request(BookingRequest(date="2026-10-10", party_size=2, visitor_name="A", language="sw"), "c"))
     assert isinstance(ok, FiledRequest) and ok.ref == "A"
-    assert not (tmp_path / "proposals.jsonl").read_text(encoding="utf-8").count("2026-10-17")
+    text = (tmp_path / "proposals.jsonl").read_text(encoding="utf-8")
+    assert "2026-10-17" not in text and "2026-01-01" not in text and text.count("\n") == 1
 
 
 def test_speaker_tool_says_the_refusal_and_does_not_touch_the_live_view(tmp_path) -> None:  # noqa: ANN001
