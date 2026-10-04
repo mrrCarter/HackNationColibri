@@ -8,8 +8,10 @@ import pytest
 
 from hub_voice.outbound import MAX_CALL_DURATION_S, RINGING_TIMEOUT_S, OutboundConfig, build_sip_request
 
-pytest.importorskip("livekit.api")
-pytest.importorskip("google.protobuf.duration_pb2")
+# Hard imports on purpose (codex-mobile on #66): livekit-api is pinned in requirements.txt so this check RUNS in CI; a
+# missing SDK is a failure, not a skip.
+import google.protobuf.duration_pb2  # noqa: E402, F401
+import livekit.api  # noqa: E402, F401
 
 OWNER = "+254700000002"
 
