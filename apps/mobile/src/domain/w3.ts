@@ -4,6 +4,7 @@ import {
   buildDecisionCards,
   ingestMessages,
   proposeFollowUp,
+  formatTimestamp,
   type DecisionCard,
   type FeedbackAnalysis,
   type StoredSource,
@@ -11,8 +12,8 @@ import {
 import sw from '@sauti/experience/copy/sw.json';
 import en from '@sauti/experience/copy/en.json';
 import { listFeedbackSources } from '../import/feedbackImport';
-import { tagFeedback } from '../vendor/max/tag_feedback';
-import { coreDb, insertProposedAction, sha256, TENANT_ID } from './coreDb';
+import { tagFeedback, type TaggerOutput } from '../vendor/max/tag_feedback';
+import { appendAudit, coreDb, insertProposedAction, sha256, TENANT_ID } from './coreDb';
 
 const SUPPORTED = new Set(['sw', 'en', 'de', 'fr']);
 
@@ -21,6 +22,8 @@ export type W3Result = {
   cards: DecisionCard[];
   sources: Map<string, StoredSource>;
   rejected: number;
+  /** Max's tagger output per message (what code read, no model). */
+  tagged: TaggerOutput;
 };
 
 /**
@@ -44,7 +47,7 @@ export async function runW3(): Promise<W3Result> {
   );
   const analysis = analyzeFeedback(tagged, ingested.sources, sha256, { supportedLanguages: SUPPORTED });
   const cards = buildDecisionCards(analysis, sha256);
-  return { analysis, cards, sources: ingested.sources, rejected: ingested.rejected.length };
+  return { analysis, cards, sources: ingested.sources, rejected: ingested.rejected.length, tagged };
 }
 
 type CopyKey = keyof typeof sw.keys;
@@ -52,21 +55,25 @@ const fill = (text: string, vars: Record<string, string | number>): string =>
   text.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? `{${k}}`));
 
 /**
- * Demo mode (Cosme): every Swahili string on screen is followed by its English in parentheses, so a
- * non-Swahili audience can follow. Message BODIES sent to visitors never use this (see tSw / tEn).
+ * UI language (demo toggle EN | SW | SW+EN, components/Lang.tsx). Message BODIES sent to visitors never follow it
+ * (see tSw / tEn), and text stored inside an envelope uses the fixed both-language form (tBoth / biBoth), so a
+ * digest never depends on the toggle.
  */
-export const BILINGUAL = true;
+export type UiLang = 'en' | 'sw' | 'both';
+let uiLang: UiLang = 'en';
+export const getUiLang = (): UiLang => uiLang;
+export const setUiLangValue = (lang: UiLang): void => { uiLang = lang; };
+
 export const tSw = (key: CopyKey, vars: Record<string, string | number> = {}): string => fill(sw.keys[key].text, vars);
 export const tEn = (key: CopyKey, vars: Record<string, string | number> = {}): string =>
   fill(en.keys[key as keyof typeof en.keys]?.text ?? '', vars);
-/** Screen text: Swahili, then (English) in demo mode. */
-export const t = (key: CopyKey, vars: Record<string, string | number> = {}): string => {
-  const swText = tSw(key, vars);
-  const enText = tEn(key, vars);
-  return BILINGUAL && enText && enText !== swText ? `${swText} (${enText})` : swText;
-};
-/** Same rule for strings that are not in the Experience copy yet. */
-export const bi = (swText: string, enText: string): string => (BILINGUAL ? `${swText} (${enText})` : swText);
+/** Stored text: always "Swahili (English)". */
+export const biBoth = (swText: string, enText: string): string => (enText && enText !== swText ? `${swText} (${enText})` : swText);
+export const tBoth = (key: CopyKey, vars: Record<string, string | number> = {}): string => biBoth(tSw(key, vars), tEn(key, vars));
+/** Screen text in the chosen UI language. */
+export const bi = (swText: string, enText: string): string =>
+  uiLang === 'en' ? enText || swText : uiLang === 'sw' ? swText : biBoth(swText, enText);
+export const t = (key: CopyKey, vars: Record<string, string | number> = {}): string => bi(tSw(key, vars), tEn(key, vars));
 
 /**
  * Theme names shown to Noor. Not yet in packages/experience (asked xam-claude to add theme.* keys);
@@ -76,7 +83,7 @@ const THEMES: Record<string, [string, string]> = {
   coffee: ['Kahawa', 'Coffee'],
   farm_walk: ['Matembezi shambani', 'Farm walk'],
   guide: ['Mwongozo', 'Guide'],
-  host: ['Ukarimu wa mwenyeji', 'Host welcome'],
+  host: ['Ukarimu', 'Host welcome'],
   directions: ['Maelekezo ya kufika', 'Directions'],
   food: ['Chakula', 'Food'],
   price: ['Bei', 'Price'],
@@ -105,11 +112,11 @@ export async function proposeThanks(card: DecisionCard, sources: Map<string, Sto
   const body = language === 'en' ? tEn(key) : tSw(key);
   const recipient = { channel: 'simulated' as const, address: `SIMULATED:${targetId}`, language };
   const preview = [
-    t('preview.simulated'),
-    `${t('preview.to', { recipient: recipient.address })}`,
-    `${t('preview.channel', { channel: t('channel.simulated') })}`,
-    `${t('preview.body', { body })}`,
-    t('preview.unreviewed'),
+    tBoth('preview.simulated'),
+    `${tBoth('preview.to', { recipient: recipient.address })}`,
+    `${tBoth('preview.channel', { channel: tBoth('channel.simulated') })}`,
+    `${tBoth('preview.body', { body })}`,
+    tBoth('preview.unreviewed'),
   ].join(' ');
   const db = await coreDb();
   const factRow = (await db.execute('SELECT revision FROM sauti_facts WHERE tenant_id = ?;', [TENANT_ID])).rows[0];
@@ -133,4 +140,9 @@ export async function proposeThanks(card: DecisionCard, sources: Map<string, Sto
   if (!result.ok) return { ok: false, reason: `${result.reason}: ${result.detail}` };
   await insertProposedAction(result.envelope, card.card_digest);
   return { ok: true, actionId };
+}
+
+/** W3 step 5: Noor answers a decision card with "ask someone". Recorded in the audit log; nothing is sent. */
+export async function recordAskSomeone(card: DecisionCard): Promise<void> {
+  await appendAudit({ at: formatTimestamp(Date.now()), action_id: card.card_digest, event: `w3_decision_ask_someone:${card.theme}` });
 }
