@@ -26,7 +26,8 @@ The hub's routes (apps/hub/src/voice_api.mjs, merged #45; same bearer token as /
                                              422 {status: "invalid", reason}; 429 {status: "needs_owner", reason: "budget_exhausted"}
 Outbound alert calls (warden #47770; the hub lists, hub-voice dials):
   GET  /v1/owner-alerts/pending           -> {pending: [{alert_id, device_id, clip_keys, urgent, created_at}]}  (never a number)
-  POST /v1/owner-alerts/{alert_id}/result -> {status: refused|simulated|dispatched|answered|no_answer|failed, played, missing, reason?}
+  POST /v1/owner-alerts/{alert_id}/result -> {status, played, missing, reason?}; poller facts refused|simulated|dispatched|dispatch_unknown
+                                             (dispatch_unknown is non-final, reconcilable), worker facts answered|no_answer|failed (final)
 """
 
 from __future__ import annotations

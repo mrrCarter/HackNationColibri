@@ -53,9 +53,12 @@ MAX_CLIPS = 20
 DEFAULT_DAILY_CAP = 20
 DEFAULT_MANIFEST = REPO_ROOT / "packages" / "experience" / "audio" / "manifest.json"
 EAT = timezone(timedelta(hours=3))  # Africa/Nairobi, no DST; fixed offset so no tz database is needed
-RESULT_STATUSES = ("refused", "simulated", "dispatched", "answered", "no_answer", "failed")
-# Written by the worker when the dial attempt has ended. The poller's "dispatched"/"simulated" are acceptance facts only.
+# Poller facts: refused (never dispatched), simulated, dispatched (accepted), dispatch_unknown (the dispatch request
+# failed or its answer was lost: the worker MAY still run, so this is reconcilable, never final; same idea as the
+# core's send_unknown transport state). Worker facts, terminal: answered, no_answer, failed.
+RESULT_STATUSES = ("refused", "simulated", "dispatched", "dispatch_unknown", "answered", "no_answer", "failed")
 TERMINAL_STATUSES = frozenset({"answered", "no_answer", "failed"})
+POLLER_STATUSES = frozenset({"refused", "simulated", "dispatched", "dispatch_unknown"})
 
 
 def sha(text: str) -> str:
@@ -433,10 +436,13 @@ class Poller:
                 continue
             try:
                 dispatch_id = await self.dispatcher(plan)
-            except Exception as exc:  # noqa: BLE001 - the reservation stands (no retry storm); the failure is a fact
-                self.ledger.record(plan.alert_id, "failed", now, reason=f"dispatch:{type(exc).__name__}")
-                await self._report(plan.alert_id, result_payload("failed", [], list(plan.missing), f"dispatch:{type(exc).__name__}"), now)
-                out.append({"alert_id": plan.alert_id, "status": "failed"})
+            except Exception as exc:  # noqa: BLE001 - the reservation stands (no retry storm)
+                # The dispatch request failed OR its answer was lost: LiveKit may still run the job, so this is NOT a
+                # terminal failure. dispatch_unknown stays visible for reconciliation and a later worker result (answered /
+                # no_answer / failed) supersedes it (codex-mobile, #70 contract question).
+                self.ledger.record(plan.alert_id, "dispatch_unknown", now, reason=f"dispatch:{type(exc).__name__}")
+                await self._report(plan.alert_id, result_payload("dispatch_unknown", [], list(plan.missing), f"dispatch:{type(exc).__name__}"), now)
+                out.append({"alert_id": plan.alert_id, "status": "dispatch_unknown"})
                 continue
             self.ledger.record(plan.alert_id, "dispatched", now, dispatch_id=str(dispatch_id)[:64])
             await self._report(plan.alert_id, result_payload("dispatched", [], list(plan.missing)), now)

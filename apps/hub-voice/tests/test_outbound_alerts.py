@@ -167,11 +167,14 @@ def test_poller_live_dispatch_failure_keeps_the_reservation_no_retry_storm(tmp_p
         raise RuntimeError("livekit down")
 
     poller = Poller(settings, cfg(tmp_path), HubReadOnly("", "", FIXTURES), HubActions("", "", tmp_path / "rt", "demo-farm-001"), ledger, lib, dispatcher=failing_dispatch)
-    assert asyncio.run(poller.tick(T0)) == [{"alert_id": "alert-0001", "status": "failed"}]
+    # a dispatcher exception is NOT a terminal failure: LiveKit may still run the job (response lost), so it is dispatch_unknown
+    assert asyncio.run(poller.tick(T0)) == [{"alert_id": "alert-0001", "status": "dispatch_unknown"}]
     assert asyncio.run(poller.tick(T0 + 1000)) == [{"alert_id": "alert-0001", "status": "refused", "reason": "duplicate"}]
     assert calls == ["alert-0001"]  # dispatched exactly once, never retried
     rows = [json.loads(line) for line in (tmp_path / "rt" / "ledger.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert [r["kind"] for r in rows] == ["reserve", "result"] and rows[1]["status"] == "failed"
+    assert [r["kind"] for r in rows] == ["reserve", "result"] and rows[1]["status"] == "dispatch_unknown"
+    reported = json.loads((tmp_path / "rt" / "owner-alert-results.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert reported["status"] == "dispatch_unknown" and reported["reason"].startswith("dispatch:")
 
 
 def test_worker_has_no_model_and_no_approval_path() -> None:
