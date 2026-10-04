@@ -11,8 +11,9 @@
  * comes from a review, a model or a transcript the owner did not dictate.
  */
 
+import { type AuthenticatedSession, checkOwnerSession, type OwnerContext, type TrustedOwner } from "./approval.js";
 import { digest, type Sha256 } from "./canon.js";
-import { formatTimestamp } from "./clock.js";
+import { type ClockReading, formatTimestamp } from "./clock.js";
 import type { Choice } from "./decisions.js";
 import { parseAmount, parseConfirmation, parseHours, timeToString } from "./swahili.js";
 
@@ -222,6 +223,8 @@ export interface FactChangeApproval {
   proposal_digest: string;
   decided_at: string;
   transcript: string;
+  /** The owner session that said yes, as for any approval. */
+  owner_context: OwnerContext;
 }
 
 /** Everything the host writes in ONE transaction: new revision, the approval, the drafts. */
@@ -233,32 +236,87 @@ export interface AppliedFactChange {
 
 export type ConfirmFactChangeResult =
   | { ok: true; applied: AppliedFactChange }
-  | { ok: false; reason: "asr_uncertain" | "no_explicit_yes" | "declined" | "facts_changed"; detail: string };
+  | { ok: false; reason: "asr_uncertain" | "no_explicit_yes" | "declined" | "facts_changed" | "proposal_tampered" | "facts_corrupt" | "no_owner_session" | "owner_mismatch" | "device_not_trusted" | "unlock_not_allowed" | "session_revoked" | "session_time_invalid" | "session_stale" | "clock_suspect"; detail: string };
+
+/** Recompute what a proposal's digest and read-back must be from its content. */
+export function proposalDigest(p: Pick<FactChangeProposal, "theme" | "field" | "value" | "from_revision" | "from_hash">, sha256: Sha256): string {
+  return digest(FACT_CHANGE_DOMAIN, { theme: p.theme, field: p.field, value: p.value, from_revision: p.from_revision, from_hash: p.from_hash }, sha256);
+}
 
 /**
  * Noor answers the read-back. Only an explicit yes applies the change, and only
- * if the farm sheet is still the revision the change was proposed against.
+ * if (a) the proposal is byte-for-byte the one that was read back (its digest and
+ * read-back recompute from its content), (b) the farm sheet is still the revision
+ * the change was proposed against and its hash recomputes, and (c) a trusted owner
+ * session is present: a fact change is an owner act like an approval. The host
+ * runs this inside the same transaction that writes the bundle.
  */
 export function confirmFactChange(
-  input: { proposal: FactChangeProposal; transcript: string; asrUncertain?: boolean; current: FactRevision; nowMs: number },
+  input: {
+    proposal: FactChangeProposal;
+    transcript: string;
+    asrUncertain?: boolean;
+    current: FactRevision;
+    nowMs: number;
+    session: AuthenticatedSession | null;
+    trusted: TrustedOwner | null;
+    clock: ClockReading;
+    tenant_id: string;
+  },
   sha256: Sha256,
 ): ConfirmFactChangeResult {
   if (input.asrUncertain) return { ok: false, reason: "asr_uncertain", detail: "the recognizer was unsure; read back again" };
   const answer = parseConfirmation(input.transcript);
   if (answer === "no") return { ok: false, reason: "declined", detail: "Noor said no; nothing changes" };
   if (answer !== "yes") return { ok: false, reason: "no_explicit_yes", detail: "unclear is never a yes; read back again" };
-  if (input.current.revision !== input.proposal.from_revision || input.current.content_hash !== input.proposal.from_hash) {
-    return { ok: false, reason: "facts_changed", detail: `the farm sheet moved from revision ${input.proposal.from_revision} to ${input.current.revision}; propose again` };
+  const p = input.proposal;
+  if (proposalDigest(p, sha256) !== p.digest || readback(p.field, p.value) !== p.readback) {
+    return { ok: false, reason: "proposal_tampered", detail: "the proposal's content does not match what was read back; propose again" };
   }
-  const sheet: FarmSheet = { ...input.current.sheet, [input.proposal.field]: input.proposal.value };
+  const expectedField = fieldForTheme(p.theme);
+  if (expectedField !== p.field || !parseDictatedValueShape(p.field, p.value)) {
+    return { ok: false, reason: "proposal_tampered", detail: "the proposal's field or value shape is not one this theme can produce" };
+  }
+  if (factsHash(input.current.sheet, sha256) !== input.current.content_hash) {
+    return { ok: false, reason: "facts_corrupt", detail: "the current farm sheet does not match its own hash; refusing to change facts" };
+  }
+  if (input.current.revision !== p.from_revision || input.current.content_hash !== p.from_hash) {
+    return { ok: false, reason: "facts_changed", detail: `the farm sheet moved from revision ${p.from_revision} to ${input.current.revision}; propose again` };
+  }
+  const who = checkOwnerSession(input.tenant_id, input.session, input.trusted, input.clock);
+  if (!who.ok) return { ok: false, reason: who.reason, detail: who.detail };
+  if (input.clock.suspect) return { ok: false, reason: "clock_suspect", detail: "device clock is behind its own high-water mark; fact change held" };
+  const sheet: FarmSheet = { ...input.current.sheet, [p.field]: p.value };
   const revision = makeRevision(sheet, input.current.revision + 1, "w3_step6", input.nowMs, sha256);
   const drafts: ListingDraft[] = LISTING_CHANNELS.map((channel) => ({
     channel,
-    field: input.proposal.field,
-    value: input.proposal.value,
+    field: p.field,
+    value: p.value,
     from_revision: revision.revision,
     published: false,
-    draft_id: digest("sauti.listing_draft.v1", { channel, field: input.proposal.field, revision: revision.revision, hash: revision.content_hash }, sha256),
+    draft_id: digest("sauti.listing_draft.v1", { channel, field: p.field, revision: revision.revision, hash: revision.content_hash }, sha256),
   }));
-  return { ok: true, applied: { revision, approval: { proposal_digest: input.proposal.digest, decided_at: revision.created_at, transcript: input.transcript }, drafts } };
+  return { ok: true, applied: { revision, approval: { proposal_digest: p.digest, decided_at: revision.created_at, transcript: input.transcript, owner_context: ownerContextFrom(input.session!) }, drafts } };
+}
+
+/** The value must have the shape the field's parser produces; a tampered proposal cannot smuggle another type. */
+function parseDictatedValueShape(field: FactField, value: unknown): boolean {
+  switch (field) {
+    case "price_per_person_kes":
+      return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 1_000_000;
+    case "capacity_per_tour":
+      return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 200;
+    case "hours":
+      return typeof value === "object" && value !== null && /^\d{2}:\d{2}:\d{2}$/.test(String((value as { start?: unknown }).start)) && /^\d{2}:\d{2}:\d{2}$/.test(String((value as { end?: unknown }).end)) && String((value as { end: string }).end) > String((value as { start: string }).start);
+    case "directions_sw":
+      return typeof value === "string" && value.trim().split(/\s+/).length >= 3 && value.length <= 2000;
+    case "inclusions_sw":
+      return Array.isArray(value) && value.length > 0 && value.every((s) => typeof s === "string" && s.length > 1);
+    case "days":
+      return false;
+  }
+}
+
+function ownerContextFrom(session: AuthenticatedSession): OwnerContext {
+  return { owner_id: session.owner_id, device_id: session.device_id, unlock: session.unlock, session_id: session.session_id, authenticated_at: session.authenticated_at, confirmation: "voice" };
 }

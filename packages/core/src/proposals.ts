@@ -13,7 +13,7 @@ import type { Sha256 } from "./canon.js";
 import { formatTimestamp, parseTimestamp } from "./clock.js";
 import type { DecisionCard } from "./decisions.js";
 import { type ActionEnvelope, type EvidenceItem, type Recipient, sealEnvelope, type Validation } from "./envelope.js";
-import type { SourceText } from "./evidence.js";
+import { type SourceText, validateEvidenceItem } from "./evidence.js";
 
 export interface FollowUpTemplate {
   template_id: string;
@@ -40,7 +40,7 @@ export interface FollowUpInput {
   valid_for_ms: number;
 }
 
-export type FollowUpRefusal = { ok: false; reason: "invented_number" | "card_without_evidence" | "invalid_envelope" | "bad_time"; detail: string; errors?: string[] };
+export type FollowUpRefusal = { ok: false; reason: "invented_number" | "card_without_evidence" | "evidence_invalid" | "invalid_envelope" | "bad_time"; detail: string; errors?: string[] };
 
 export type FollowUpResult = { ok: true; envelope: ActionEnvelope } | FollowUpRefusal;
 
@@ -72,7 +72,12 @@ export function proposeFollowUp(input: FollowUpInput, sha256: Sha256): FollowUpR
   for (const q of card.quotes) {
     const source = input.sources.get(q.message_id);
     if (!source) return { ok: false, reason: "card_without_evidence", detail: `source ${q.message_id} is not stored` };
-    evidence.push({ source_id: q.message_id, content_hash: source.content_hash, span: { start: q.start, end: q.end }, quote: q.quote });
+    const item: EvidenceItem = { source_id: q.message_id, content_hash: source.content_hash, span: { start: q.start, end: q.end }, quote: q.quote };
+    // A card is data too: every quote is re-validated against the original bytes before it may
+    // legitimise a number or be sealed into an envelope (codex review, 2026-10-03 23:59Z).
+    const v = validateEvidenceItem(item, input.sources, sha256);
+    if (!v.ok) return { ok: false, reason: "evidence_invalid", detail: `quote on ${q.message_id} failed ${v.reason}; the card is stale or forged` };
+    evidence.push(item);
   }
 
   // Legitimate numbers: owner facts, the card's count, anything inside the quoted comments, and the

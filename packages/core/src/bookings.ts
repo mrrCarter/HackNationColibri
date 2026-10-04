@@ -11,10 +11,11 @@
  * is a question for a person, never a guess.
  */
 
+import type { ApprovalRecord } from "./approval.js";
 import { reconcileSlot, type SlotRequest, validateAppointment } from "./calendar.js";
 import type { Sha256 } from "./canon.js";
 import { formatTimestamp } from "./clock.js";
-import { type ActionEnvelope, type Recipient, sealEnvelope } from "./envelope.js";
+import { type ActionEnvelope, type Recipient, sealEnvelope, verifyEnvelope } from "./envelope.js";
 import type { FactRevision, FarmSheet, Weekday } from "./facts.js";
 import type { Money } from "./money.js";
 import { unexplainedNumbers } from "./proposals.js";
@@ -48,7 +49,7 @@ export interface Booking {
   arrival: ArrivalRecord | null;
 }
 
-export type CapacityFailureReason = "missing_fact" | "closed_day" | "outside_hours" | "bad_date" | "bad_party_size" | "no_capacity";
+export type CapacityFailureReason = "missing_fact" | "closed_day" | "outside_hours" | "unsupported_time" | "bad_date" | "bad_party_size" | "no_capacity";
 
 export type CapacityVerdict =
   | { ok: true; remaining_after: number; slot_id: string; slot_start: string; slot_end: string; price: Money }
@@ -69,27 +70,38 @@ function minutes(hhmm: string): number {
   return h * 60 + m;
 }
 
-/** Code answers "can we take this party on this date?" from the farm sheet and the confirmed seats. */
+/**
+ * Code answers "can we take this party on this date?" from the farm sheet and the
+ * confirmed seats. The farm sheet describes ONE tour per open day (capacity_per_tour,
+ * hours start..end), so the canonical slot is the date and every confirmed party
+ * that day shares the capacity. A requested time that is not the tour's start is a
+ * clarification, not a second slot (codex review, 2026-10-03 23:59Z).
+ */
 export function checkCapacity(sheet: FarmSheet, confirmed: readonly Booking[], request: BookingRequest, timezone = "Africa/Nairobi"): CapacityVerdict {
   if (!Number.isInteger(request.party_size) || request.party_size < 1) return { ok: false, reason: "bad_party_size", detail: "party size must be a whole number of at least 1" };
-  const appointment = validateAppointment({ date: request.date, time: request.time ?? (sheet.hours ? sheet.hours.start.slice(0, 5) : null), timezone });
-  if (!appointment.ok) return { ok: false, reason: "bad_date", detail: appointment.detail };
   if (sheet.capacity_per_tour === null || sheet.price_per_person_kes === null) {
     return { ok: false, reason: "missing_fact", detail: "the farm sheet has no capacity or no price yet; ask Noor (farm setup)" };
   }
   if (sheet.days === null || sheet.hours === null) return { ok: false, reason: "missing_fact", detail: "the farm sheet has no days or hours yet; ask Noor (farm setup)" };
+  const tourStart = sheet.hours.start.slice(0, 5);
+  const tourEnd = sheet.hours.end.slice(0, 5);
+  const appointment = validateAppointment({ date: request.date, time: request.time ?? tourStart, timezone });
+  if (!appointment.ok) return { ok: false, reason: "bad_date", detail: appointment.detail };
   const weekday = weekdayOf(request.date);
   if (!weekday || !sheet.days.includes(weekday)) return { ok: false, reason: "closed_day", detail: `the farm does not take visitors on ${weekday ?? request.date}` };
   const start = appointment.time;
-  if (minutes(start) < minutes(sheet.hours.start.slice(0, 5)) || minutes(start) >= minutes(sheet.hours.end.slice(0, 5))) {
-    return { ok: false, reason: "outside_hours", detail: `tours run ${sheet.hours.start.slice(0, 5)} to ${sheet.hours.end.slice(0, 5)}` };
+  if (minutes(start) < minutes(tourStart) || minutes(start) >= minutes(tourEnd)) {
+    return { ok: false, reason: "outside_hours", detail: `tours run ${tourStart} to ${tourEnd}` };
   }
-  const slot_id = `${request.date}T${start}`;
+  if (start !== tourStart) {
+    return { ok: false, reason: "unsupported_time", detail: `the tour on ${request.date} starts at ${tourStart}; ask the visitor whether ${tourStart} works` };
+  }
+  const slot_id = request.date;
   const taken = confirmed.filter((b) => b.state === "confirmed" && b.slot_id === slot_id).reduce((n, b) => n + b.request.party_size, 0);
   const remaining = sheet.capacity_per_tour - taken;
   if (request.party_size > remaining) return { ok: false, reason: "no_capacity", detail: `${remaining} of ${sheet.capacity_per_tour} seats left on ${slot_id}` };
   const price: Money = { amount_minor: sheet.price_per_person_kes * request.party_size * 100, currency: "KES", exponent: 2 };
-  return { ok: true, remaining_after: remaining - request.party_size, slot_id, slot_start: start, slot_end: sheet.hours.end.slice(0, 5), price };
+  return { ok: true, remaining_after: remaining - request.party_size, slot_id, slot_start: tourStart, slot_end: tourEnd, price };
 }
 
 export interface BookingProposalInput {
@@ -149,18 +161,64 @@ export function proposeBooking(input: BookingProposalInput, sha256: Sha256): Boo
   return { ok: true, envelope: sealed.value, booking };
 }
 
+export interface ConfirmBookingInput {
+  booking: Booking;
+  /** The stored envelope the owner approved. Verified (schema + digest) here again. */
+  envelope: ActionEnvelope;
+  /** The immutable approval record for that envelope. */
+  approval: ApprovalRecord;
+  tenant_id: string;
+  sheet: FarmSheet;
+  current_fact_revision: number;
+  confirmed: readonly Booking[];
+  authoritative: boolean;
+  requested_at: string;
+  sha256: Sha256;
+}
+
+export type ConfirmBookingResult =
+  | { ok: true; booking: Booking }
+  | { ok: false; reason: "not_tentative" | "envelope_invalid" | "approval_not_bound" | "envelope_mismatch" | "fact_revision_changed" | "not_authoritative" | "no_capacity"; detail: string };
+
 /**
  * Noor approved the book_slot envelope (through approveExact). Confirm the booking
- * on the authoritative calendar: the seats are re-checked against what is confirmed
- * NOW, because other bookings may have landed since the proposal. Offline devices
- * stay tentative (see calendar.reconcileSlot).
+ * on the authoritative calendar. The COMPLETE stored booking is bound to the exact
+ * approved action: tenant, action digest, approval record, slot date, start, end,
+ * party size, price and fact revision must all match, and the seats are re-checked
+ * against what is confirmed NOW, because other bookings may have landed since the
+ * proposal. Offline devices stay tentative (see calendar.reconcileSlot).
  */
-export function confirmBooking(booking: Booking, approvedEnvelope: ActionEnvelope, sheet: FarmSheet, confirmed: readonly Booking[], authoritative: boolean, requested_at: string): { ok: true; booking: Booking } | { ok: false; reason: "envelope_mismatch" | "not_authoritative" | "no_capacity"; detail: string } {
-  const p = approvedEnvelope.payload;
-  if (approvedEnvelope.kind !== "book_slot" || p.type !== "book_slot" || p.booking_id !== booking.booking_id || p.slot_date !== booking.request.date || p.party_size !== booking.request.party_size) {
-    return { ok: false, reason: "envelope_mismatch", detail: "the approved action is not this booking" };
+export function confirmBooking(input: ConfirmBookingInput): ConfirmBookingResult {
+  const { booking, envelope, approval } = input;
+  if (booking.state !== "tentative") return { ok: false, reason: "not_tentative", detail: `booking is ${booking.state}` };
+  const verified = verifyEnvelope(envelope, input.sha256);
+  if (!verified.ok) return { ok: false, reason: "envelope_invalid", detail: verified.errors.join("; ") };
+  if (approval.decision !== "approved" || approval.action_id !== envelope.action_id || approval.digest !== envelope.digest) {
+    return { ok: false, reason: "approval_not_bound", detail: "the approval record does not approve this exact envelope" };
   }
-  if (!authoritative) return { ok: false, reason: "not_authoritative", detail: "this device is not the authoritative calendar; the booking stays tentative until reconciled" };
+  if (envelope.tenant_id !== input.tenant_id) return { ok: false, reason: "approval_not_bound", detail: "the approved action belongs to another tenant" };
+  const p = envelope.payload;
+  const same =
+    envelope.kind === "book_slot" &&
+    p.type === "book_slot" &&
+    p.booking_id === booking.booking_id &&
+    p.slot_date === booking.request.date &&
+    p.slot_start === booking.slot_start &&
+    p.slot_end === booking.slot_end &&
+    p.party_size === booking.request.party_size &&
+    p.price.amount_minor === booking.price.amount_minor &&
+    p.price.currency === booking.price.currency &&
+    p.price.exponent === booking.price.exponent &&
+    envelope.fact_revision === booking.fact_revision &&
+    booking.slot_id === booking.request.date;
+  if (!same) return { ok: false, reason: "envelope_mismatch", detail: "the stored booking differs from the approved action in at least one bound field" };
+  if (approval.fact_revision !== envelope.fact_revision || input.current_fact_revision !== envelope.fact_revision) {
+    return { ok: false, reason: "fact_revision_changed", detail: `approved on fact revision ${envelope.fact_revision}, current is ${input.current_fact_revision}; propose again` };
+  }
+  if (!input.authoritative) return { ok: false, reason: "not_authoritative", detail: "this device is not the authoritative calendar; the booking stays tentative until reconciled" };
+  const sheet = input.sheet;
+  const confirmed = input.confirmed;
+  const requested_at = input.requested_at;
   const capacity = sheet.capacity_per_tour ?? 0;
   const already = confirmed.filter((b) => b.state === "confirmed" && b.slot_id === booking.slot_id).map((b) => ({ booking_id: b.booking_id, party_size: b.request.party_size }));
   const req: SlotRequest = { booking_id: booking.booking_id, slot_id: booking.slot_id, party_size: booking.request.party_size, requested_at, authority: "authoritative" };

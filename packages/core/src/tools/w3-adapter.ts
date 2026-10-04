@@ -14,7 +14,9 @@
 
 import { createHash } from "node:crypto";
 
+import type { AuthenticatedSession, TrustedOwner } from "../approval.js";
 import { type Sha256 } from "../canon.js";
+import { observeClock } from "../clock.js";
 import { buildDecisionCards, type Choice, type DecisionCard, recordChoice } from "../decisions.js";
 import { type ThemeSummary } from "../evidence.js";
 import { type AppliedFactChange, confirmFactChange, type FactChangeProposal, type FactRevision, type FarmSheet, makeRevision, proposeFactChange } from "../facts.js";
@@ -73,6 +75,11 @@ interface Input {
 }
 
 const FIXTURE_NOW_MS = Date.parse("2026-10-03T21:00:00Z"); // the harness clock; the product's host supplies time
+const FIXTURE_TENANT = "demo-farm-001";
+// The fixtures assume Noor herself is at the phone: a harness owner session on the trusted device.
+const FIXTURE_SESSION: AuthenticatedSession = { tenant_id: FIXTURE_TENANT, owner_id: "demo-noor-001", device_id: "demo-phone-001", unlock: "pin", session_id: "harness-session", authenticated_at: "2026-10-03T20:55:00Z" };
+const FIXTURE_TRUSTED: TrustedOwner = { tenant_id: FIXTURE_TENANT, owner_id: "demo-noor-001", trusted_device_ids: new Set(["demo-phone-001"]), allowed_unlock: new Set(["pin"]), max_session_age_ms: 15 * 60 * 1000, revoked_session_ids: new Set() };
+const FIXTURE_CLOCK = observeClock({ highWaterMs: 0 }, FIXTURE_NOW_MS);
 
 function asFarmSheet(v: unknown): FarmSheet | null {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return null;
@@ -188,7 +195,7 @@ export function runFixture(input: Input): Record<string, unknown> {
         factRefusals.push({ theme, reason: "nothing_proposed" });
         continue;
       }
-      const c = confirmFactChange({ proposal, transcript: String(step.transcript ?? ""), asrUncertain: step.asr_uncertain === true, current: facts, nowMs: FIXTURE_NOW_MS }, sha256);
+      const c = confirmFactChange({ proposal, transcript: String(step.transcript ?? ""), asrUncertain: step.asr_uncertain === true, current: facts, nowMs: FIXTURE_NOW_MS, session: FIXTURE_SESSION, trusted: FIXTURE_TRUSTED, clock: FIXTURE_CLOCK, tenant_id: FIXTURE_TENANT }, sha256);
       if (c.ok) {
         // One bundle: revision, approval and drafts are committed together by the host.
         facts = c.applied.revision;
