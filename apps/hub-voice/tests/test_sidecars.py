@@ -78,7 +78,7 @@ async def test_sidecar_context_has_no_mutating_handle() -> None:
     assert report.failed == [] and [a.source for a in report.advices] == ["rogue"]
     # The read-only hub client has no write method at all; the write lives on a different class the sidecars never see.
     ro_methods = {n for n, _ in inspect.getmembers(HubReadOnly, inspect.isfunction) if not n.startswith("_")}
-    assert ro_methods == {"availability", "farm_facts", "owner_match", "pending_requests", "feedback_summary"}
+    assert ro_methods == {"availability", "farm_facts", "owner_match", "pending_requests", "feedback_summary", "pending_alert_calls"}
     assert "file_booking_request" in {n for n, _ in inspect.getmembers(HubActions, inspect.isfunction)}
     assert not isinstance(ctx.hub, HubActions)
 
