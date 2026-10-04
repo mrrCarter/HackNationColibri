@@ -18,7 +18,21 @@ def ctx() -> SidecarContext:
 
 
 def test_finding_1_code_followed_by_period_or_at_sentence_start_is_redacted() -> None:
-    for text in ["NDIYO A 482193.", "Jibu: NDIYO A 482193. Asante", "Kodi yangu. 482193 ndiyo hiyo", "(482193)", "482193", "NDIYO A 48 21 93."]:
+    # warden #47789: after '.', ',', '?', '!', at end of string, inside a sentence, with spaces, in brackets, after a colon
+    for text in [
+        "NDIYO A 482193.",
+        "NDIYO A 482193,",
+        "NDIYO A 482193?",
+        "NDIYO A 482193!",
+        "NDIYO A 482193",
+        "Jibu: NDIYO A 482193. Asante",
+        "nilijibu ndiyo a 482193 na nikasubiri",
+        "Kodi yangu. 482193 ndiyo hiyo",
+        "(482193)",
+        "code:482193",
+        "NDIYO A 48 21 93.",
+        "the code is NDIYO A 482193.",
+    ]:
         out = redact_text(text)
         assert "482193" not in out and "48 21 93" not in out, (text, out)
         assert not contains_secret_shape(out), (text, out)

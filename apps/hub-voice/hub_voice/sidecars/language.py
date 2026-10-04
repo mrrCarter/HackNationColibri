@@ -22,7 +22,9 @@ DE = {"wir", "ich", "möchten", "möchte", "buchen", "besuch", "personen", "hall
 # guceerera mugunda wa kahua Jumamosi" scored sw on two stopwords).
 LOOKALIKE = {
     "murakoze", "mwaramutse", "ni iki", "ndashaka", "nnyabo", "ssebo", "webale", "nkwagala", "mbote", "nalingi", "yambi", "ndeko", "muraho", "amakuru", "oyo", "kati",
-    "ni wega", "nĩ wega", "wega muno", "wega mũno", "ningwenda", "nĩngwenda", "guceerera", "gũceerera", "mugunda", "mũgũnda", "kahua", "kahũa", "wi mwega", "wĩ mwega", "uhoro waku", "ũhoro waku", "thengiu", "thengiũ", "ni kuga", "nĩ kũga", "ngai", "mwathani",
+    "ni wega", "nĩ wega", "wega muno", "wega mũno", "ningwenda", "nĩngwenda", "ngwenda", "guceerera", "gũceerera", "mugunda", "mũgũnda", "kahua", "kahũa", "wi mwega", "wĩ mwega", "uhoro waku", "ũhoro waku", "thengiu", "thengiũ", "ni kuga", "nĩ kũga", "ngai", "mwathani",
+    # the letters ĩ and ũ exist in Kikuyu orthography and not in Swahili: any occurrence is a look-alike signal (Nat, #47788)
+    "ĩ", "ũ",
 }
 
 WORD = re.compile(r"[\w']+", re.UNICODE)
