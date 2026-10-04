@@ -217,15 +217,17 @@ class CallLedger:
         Two pollers cannot both reserve the same alert, and the day never exceeds its cap."""
         if self.reserved(alert_id):
             return False
+        # Alert marker FIRST (uniqueness), slot second: a day slot, once claimed, is never given back, so a racing
+        # reservation for a different alert can never be refused by a slot that is about to be released.
+        if not self._claim("reserve", self._marker_name(alert_id)):
+            return False  # another poller reserved this alert
         slot: str | None = None
         for n in range(cap):
             if self._claim("day", day, f"slot-{n:03d}"):
                 slot = f"slot-{n:03d}"
                 break
         if slot is None:
-            return False  # cap exhausted
-        if not self._claim("reserve", self._marker_name(alert_id)):
-            os.unlink(self.markers / "day" / day / slot)  # lost the race for this alert: give the slot back
+            os.unlink(self.markers / "reserve" / self._marker_name(alert_id))  # cap exhausted: this alert is not reserved
             return False
         self._append({"kind": "reserve", "alert_id": alert_id, "farm_day": day, "slot": slot, "t_ms": now_ms})
         return True
@@ -283,8 +285,8 @@ class OutboundConfig:
         cap_raw = os.environ.get("SAUTI_ALERT_DAILY_CAP", "").strip()
         try:
             cap = int(cap_raw) if cap_raw else DEFAULT_DAILY_CAP
-        except ValueError as exc:
-            raise ConfigError("SAUTI_ALERT_DAILY_CAP: not an integer") from exc
+        except ValueError:
+            raise ConfigError("SAUTI_ALERT_DAILY_CAP: not an integer") from None  # the parser's message would echo the raw value
         if cap < 1 or cap > 200:
             raise ConfigError("SAUTI_ALERT_DAILY_CAP: 1..200")
         manifest = Path(os.environ.get("SAUTI_CLIP_MANIFEST", "") or DEFAULT_MANIFEST)
@@ -393,8 +395,10 @@ class Poller:
         for item in pending:
             try:
                 req = AlertRequest.parse(item)
-            except ValueError as exc:
-                out.append({"alert_id": str(item.get("alert_id", "?"))[:128] if isinstance(item, dict) else "?", "status": "refused", "reason": f"invalid: {exc}"})
+            except ValueError:
+                # Never copy a malformed id into output or logs (it could carry a number): a fixed label plus a hash of the raw item.
+                raw = json.dumps(item, sort_keys=True, ensure_ascii=False, default=str) if item is not None else "null"
+                out.append({"alert_id": f"invalid:{sha(raw)[:16]}", "status": "refused", "reason": "invalid"})
                 continue
             plan = plan_call(req, self.cfg, self.library, self.ledger, now)
             if isinstance(plan, Refusal):
