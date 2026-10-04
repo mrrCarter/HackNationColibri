@@ -18,7 +18,12 @@ EN = {"the", "and", "to", "for", "we", "i", "you", "would", "like", "book", "boo
 FR = {"le", "la", "les", "nous", "vous", "je", "voudrais", "réserver", "visite", "personnes", "bonjour", "merci", "demain", "samedi", "dimanche", "pour", "est", "une", "des", "s'il", "plaît", "combien"}
 DE = {"wir", "ich", "möchten", "möchte", "buchen", "besuch", "personen", "hallo", "danke", "morgen", "samstag", "sonntag", "für", "ist", "eine", "der", "die", "das", "und", "bitte", "wie", "viel"}
 # Markers of neighbouring Bantu languages that share many short words with Swahili. Any hit = und, not sw.
-LOOKALIKE = {"murakoze", "mwaramutse", "ni iki", "ndashaka", "nnyabo", "ssebo", "webale", "nkwagala", "mbote", "nalingi", "yambi", "ndeko", "muraho", "amakuru", "oyo", "kati"}
+# Kinyarwanda, Luganda, Lingala, and Kikuyu with and without diacritics (Nat, 2026-10-04: "Ni wega muno, ningwenda
+# guceerera mugunda wa kahua Jumamosi" scored sw on two stopwords).
+LOOKALIKE = {
+    "murakoze", "mwaramutse", "ni iki", "ndashaka", "nnyabo", "ssebo", "webale", "nkwagala", "mbote", "nalingi", "yambi", "ndeko", "muraho", "amakuru", "oyo", "kati",
+    "ni wega", "nĩ wega", "wega muno", "wega mũno", "ningwenda", "nĩngwenda", "guceerera", "gũceerera", "mugunda", "mũgũnda", "kahua", "kahũa", "wi mwega", "wĩ mwega", "uhoro waku", "ũhoro waku", "thengiu", "thengiũ", "ni kuga", "nĩ kũga", "ngai", "mwathani",
+}
 
 WORD = re.compile(r"[\w']+", re.UNICODE)
 

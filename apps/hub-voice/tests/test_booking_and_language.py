@@ -43,7 +43,7 @@ async def test_booking_sidecar_reports_availability_and_never_confirms() -> None
     assert adv is not None
     assert adv.data["facts"] == {"party_size": 2, "date": "2026-10-10"}
     assert {q["field"] for q in adv.data["quotes"]} == {"party_size", "date"}
-    assert adv.data["availability"]["remaining"] == 6  # fixture: capacity 8, 2 confirmed on 2026-10-10
+    assert adv.data["availability"]["remaining"] == 8  # fixture: capacity 10 (as the hub's farm sheet), 2 confirmed on 2026-10-10
     assert "FILE A REQUEST" in adv.summary and "Noor confirms" in adv.summary
     for word in ("booked", "confirmed,", "reserved"):
         assert word not in adv.summary.lower()
@@ -54,10 +54,14 @@ async def test_booking_sidecar_flags_full_closed_and_too_big() -> None:
     board = Blackboard("b2")
     full = await BookingSidecar(today=TODAY).run(Turn(1, "watu wawili tarehe 2026-10-17"), ctx(board))
     assert full is not None and "FULL" in full.summary
-    closed = await BookingSidecar(today=TODAY).run(Turn(2, "two people on 2026-10-12"), ctx(board))  # Monday: closed in the fixture
+    closed = await BookingSidecar(today=TODAY).run(Turn(2, "two people on 2026-10-12"), ctx(board))  # Monday closed by the owner in the fixture
     assert closed is not None and "CLOSED" in closed.summary
-    big = await BookingSidecar(today=TODAY).run(Turn(3, "watu kumi Jumamosi"), ctx(board))
-    assert big is not None and "only 6 of 8" in big.summary
+    sunday = await BookingSidecar(today=TODAY).run(Turn(3, "two people on 2026-10-11"), ctx(board))  # not a tour day (mon-sat)
+    assert sunday is not None and "CLOSED" in sunday.summary
+    big = await BookingSidecar(today=TODAY).run(Turn(4, "watu kumi Jumamosi"), ctx(board))  # 10 = capacity, 8 left
+    assert big is not None and "only 8 of 10" in big.summary and "another day" in big.summary
+    huge = await BookingSidecar(today=TODAY).run(Turn(5, "watu kumi na wawili Jumamosi"), ctx(board))  # 12 > capacity 10: no day fits
+    assert huge is not None and "LARGER than one tour" in huge.summary and "do not offer another day" in huge.summary
 
 
 def test_language_detection_refuses_lookalikes_and_unsupported() -> None:

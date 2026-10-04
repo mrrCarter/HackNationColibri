@@ -12,10 +12,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# 7+ digits with optional separators, optional +: phone numbers in any local format.
-PHONE = re.compile(r"(?<![\w.])\+?(?:\d[\s().-]{0,3}){7,15}\d(?![\w])")
-# A standalone group of 4 to 8 digits: approval codes (the hub issues 4 by default, up to 8).
-CODE = re.compile(r"(?<![\w.])\d(?:[ ]?\d){3,7}(?![\w.])")
+# 7+ digits with optional separators, optional +: phone numbers in any local format. A sentence-final period or a
+# code at the start of a sentence must still match (Nat, 2026-10-04: "NDIYO A 482193." is normal STT output); only a
+# decimal point between digits ("3.14159") is excluded.
+PHONE = re.compile(r"(?<!\w)(?<!\d\.)\+?(?:\d[\s().-]{0,3}){7,15}\d(?!\w)(?!\.\d)")
+# A standalone group of 4 to 8 digits: approval codes (the hub issues 6 by default, 4..8).
+CODE = re.compile(r"(?<!\w)(?<!\d\.)\d(?:[ ]?\d){3,7}(?!\w)(?!\.\d)")
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # Years are the one 4-digit group worth keeping in prose ("2026-10-11").
 ISO_DATE = re.compile(r"\b(19|20)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b")
