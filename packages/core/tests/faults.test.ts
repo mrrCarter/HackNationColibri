@@ -15,6 +15,7 @@ import { buildDecisionCards, parseChoice, recordChoice } from "../src/decisions.
 import { countUniqueSources, summarizeThemes, summarizeThemesReport, validateEvidenceItem, type SourceText, type TaggedItem } from "../src/evidence.js";
 import { ingestMessages } from "../src/ingest.js";
 import { type Booking, type BookingRequest, checkCapacity, confirmBooking, proposeBooking, proposeBookingMessage, recordArrival } from "../src/bookings.js";
+import { enrollOwner, revokeAllSessions, startSession } from "../src/enrollment.js";
 import { confirmFactChange, type FarmSheet, makeRevision, proposalDigest, proposeFactChange, validateFarmSheet } from "../src/facts.js";
 import { proposeFollowUp, unexplainedNumbers } from "../src/proposals.js";
 import { parseAmount, parseConfirmation, parseHours } from "../src/swahili.js";
@@ -596,6 +597,35 @@ describe("v1 scope: farm setup validation, booking proposals on the authoritativ
     const c = confirmBooking(confirmArgs(approvedBooking(p)));
     if (!c.ok) throw new Error("fixture");
     expect(recordArrival(c.booking, "no_show")).toMatchObject({ ok: true, booking: { arrival: "no_show", state: "confirmed" } });
+  });
+});
+
+describe("trust bootstrap: enrollment creates the registry, PIN entry creates sessions the approval path accepts", () => {
+  it("enrollOwner validates ids and defaults to the Sauti PIN with a 15-minute session", () => {
+    const e = enrollOwner({ tenant_id: "farm-1", owner_id: "noor-1", device_id: "phone-1" });
+    expect(e.ok).toBe(true);
+    if (!e.ok) return;
+    expect(e.trusted).toMatchObject({ tenant_id: "farm-1", owner_id: "noor-1", max_session_age_ms: 15 * 60 * 1000 });
+    expect([...e.trusted.trusted_device_ids]).toEqual(["phone-1"]);
+    expect([...e.trusted.allowed_unlock]).toEqual(["pin"]);
+    expect(enrollOwner({ tenant_id: "", owner_id: "noor-1", device_id: "phone-1" })).toMatchObject({ ok: false });
+    expect(enrollOwner({ tenant_id: "farm-1", owner_id: "noor-1", device_id: "phone-1", max_session_age_ms: 10 })).toMatchObject({ ok: false });
+  });
+
+  it("a session started on the enrolled device approves; another device, a disallowed method or a revoked session does not", () => {
+    const env = goodEnvelope();
+    const e = enrollOwner({ tenant_id: env.tenant_id, owner_id: "noor-1", device_id: "phone-1" });
+    if (!e.ok) throw new Error("fixture");
+    const s = startSession({ trusted: e.trusted, device_id: "phone-1", unlock: "pin", session_id: "s-1", nowMs: Date.parse("2026-10-03T20:55:00Z") });
+    expect(s.ok).toBe(true);
+    if (!s.ok) return;
+    expect(decideApproval(approveArgs(env, { session: s.session, trusted: e.trusted })).ok).toBe(true);
+    expect(startSession({ trusted: e.trusted, device_id: "daughters-phone", unlock: "pin", session_id: "s-2", nowMs: Date.parse(NOW) })).toMatchObject({ ok: false, reason: "device_not_trusted" });
+    expect(startSession({ trusted: e.trusted, device_id: "phone-1", unlock: "biometric", session_id: "s-3", nowMs: Date.parse(NOW) })).toMatchObject({ ok: false, reason: "unlock_not_allowed" });
+    const afterReset = revokeAllSessions(e.trusted, ["s-1"]);
+    expect(decideApproval(approveArgs(env, { session: s.session, trusted: afterReset }))).toMatchObject({ ok: false, reason: "session_revoked" });
+    const stale = { ...s.session, authenticated_at: "2026-10-03T19:00:00Z" };
+    expect(decideApproval(approveArgs(env, { session: stale, trusted: e.trusted }))).toMatchObject({ ok: false, reason: "session_stale" });
   });
 });
 

@@ -12,6 +12,7 @@ export * from "./proposals.js";
 export * from "./swahili.js";
 export * from "./facts.js";
 export * from "./bookings.js";
+export * from "./enrollment.js";
 export * from "./approval.js";
 export * from "./outbox.js";
 export * from "./calendar.js";
