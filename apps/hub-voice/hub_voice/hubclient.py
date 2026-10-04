@@ -24,6 +24,9 @@ The hub's routes (apps/hub/src/voice_api.mjs, merged #45; same bearer token as /
                                              429/503 {status: "needs_owner", reason}
   POST /v1/owner-proposals                -> 201 {ref, action_id, status: "pending_owner", kind, expires_at};
                                              422 {status: "invalid", reason}; 429 {status: "needs_owner", reason: "budget_exhausted"}
+Outbound alert calls (warden #47770; the hub lists, hub-voice dials):
+  GET  /v1/owner-alerts/pending           -> {pending: [{alert_id, device_id, clip_keys, urgent, created_at}]}  (never a number)
+  POST /v1/owner-alerts/{alert_id}/result -> {status: refused|simulated|dispatched|answered|no_answer|failed, played, missing, reason?}
 """
 
 from __future__ import annotations
@@ -145,6 +148,16 @@ class HubReadOnly:
             return json.loads((self._fixtures / "feedback_summary.json").read_text(encoding="utf-8"))
         return await self._get("/v1/feedback/summary", {})
 
+    async def pending_alert_calls(self) -> list[dict[str, Any]]:
+        """Owner-alert calls the hub wants placed: {alert_id, device_id, clip_keys, urgent}. Never a phone number."""
+        if self.simulated:
+            path = self._fixtures / "pending_alerts.json"
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"pending": []}
+        else:
+            data = await self._get("/v1/owner-alerts/pending", {})
+        items = data.get("pending", []) if isinstance(data, dict) else []
+        return [i for i in items if isinstance(i, dict)]
+
     async def _get(self, path: str, params: dict[str, str]) -> Any:
         if httpx is None:
             raise HubError("httpx is not installed")
@@ -244,6 +257,19 @@ class HubActions:
             return FiledRequest(ref=ref, action_id=action_id, status="pending_owner")
         status, data = await self._post("/v1/owner-proposals", body)
         return self._outcome(status, data)
+
+    async def report_alert_call(self, alert_id: str, payload: dict[str, Any]) -> None:
+        """Tell the hub what happened to an owner-alert call (refused / simulated / dispatched / answered / no_answer / failed). Not an approval of anything."""
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", alert_id):
+            raise HubError("bad alert id")
+        if self.simulated:
+            self._runtime.mkdir(parents=True, exist_ok=True)
+            with (self._runtime / "owner-alert-results.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"synthetic": True, "alert_id": alert_id, **payload}, ensure_ascii=False) + "\n")
+            return
+        status, _data = await self._post(f"/v1/owner-alerts/{alert_id}/result", payload)
+        if status not in (200, 201, 204):
+            raise HubError(f"hub answered {status}")
 
     # ---- helpers
 
