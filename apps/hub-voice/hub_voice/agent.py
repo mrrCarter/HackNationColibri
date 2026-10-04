@@ -40,6 +40,25 @@ from .sidecars import PreparerDisplay, PreparerSidecar, SidecarContext, Turn, de
 
 log = logging.getLogger("sauti-hub")
 
+# Every HTTP client this process creates for a model server: no proxy from the environment, no redirects, a timeout.
+# codex (PR #62): the SDK defaults (trust_env=True, redirects) would let HTTP_PROXY route "loopback" traffic elsewhere.
+HTTP_CLIENT_OPTIONS = {"trust_env": False, "follow_redirects": False}
+
+
+def guarded_http_client(timeout_s: float = 30.0):  # noqa: ANN201 - httpx.AsyncClient, imported lazily
+    import httpx
+
+    return httpx.AsyncClient(timeout=timeout_s, **HTTP_CLIENT_OPTIONS)
+
+
+def local_openai_client(name: str, base_url: str, timeout_s: float = 30.0):  # noqa: ANN201 - openai.AsyncOpenAI, imported lazily
+    """The OpenAI-compatible SDK client the livekit plugins use, pinned to a loopback base URL and a guarded HTTP client."""
+    import openai as openai_sdk
+
+    from .config import require_loopback
+
+    return openai_sdk.AsyncOpenAI(base_url=require_loopback(name, base_url), api_key="local", http_client=guarded_http_client(timeout_s), max_retries=1)
+
 TOURIST_TOOLS = ("consult_sidecars", "farm_facts", "check_availability", "file_booking_request")
 OWNER_TOOLS = ("consult_sidecars", "farm_facts", "pending_requests", "feedback_summary", "propose_change")
 
@@ -271,17 +290,16 @@ async def entrypoint(ctx) -> None:  # noqa: ANN001 - livekit JobContext
         log.warning("model servers not configured (SAUTI_STT_BASE_URL / SAUTI_LLM_BASE_URL / SAUTI_TTS_BASE_URL): the worker cannot speak; use `simulate` for an offline run")
         return
 
-    stt = openai.STT(base_url=settings.stt_base_url, api_key="local", model=settings.stt_model, language="sw")
+    stt = openai.STT(client=local_openai_client("SAUTI_STT_BASE_URL", settings.stt_base_url), model=settings.stt_model, language="sw")
     # Gemma 4 via llama.cpp thinks by default and then answers with nothing (warden #47669). Serve with `--reasoning off`
     # (or `--reasoning-budget 0`); the request fields below ask for the same per call.
     llm = openai.LLM(
-        base_url=settings.llm_base_url,
-        api_key="local",
+        client=local_openai_client("SAUTI_LLM_BASE_URL", settings.llm_base_url),
         model=settings.llm_model,
         temperature=0.2,
         extra_body={"reasoning_format": "none", "chat_template_kwargs": {"enable_thinking": False}},
     )
-    tts = openai.TTS(base_url=settings.tts_base_url, api_key="local", model="tts-1", voice=settings.tts_voice, response_format="wav")
+    tts = openai.TTS(client=local_openai_client("SAUTI_TTS_BASE_URL", settings.tts_base_url), model="tts-1", voice=settings.tts_voice, response_format="wav")
     turn_handling: dict[str, Any] = {"interruption": {"enabled": True, "min_words": 0}}
     detector = _turn_detector()
     if detector is not None:

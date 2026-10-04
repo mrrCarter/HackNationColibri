@@ -42,15 +42,24 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 def require_loopback(name: str, url: str) -> str:
-    """Return the URL if it points at this PC over http(s); raise ConfigError otherwise. Empty = not configured = fine."""
+    """Return the URL if it points at this PC over http(s); raise ConfigError otherwise. Empty = not configured = fine.
+
+    The error never echoes the URL, its host or the parser's message: a misconfigured URL may carry credentials
+    (codex, PR #62), and an error line can end up in a log.
+    """
     if not url:
         return url
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()  # raises ValueError on a malformed bracket host
+    except ValueError:
+        raise ConfigError(f"{name}: not a valid URL") from None
     if parts.scheme not in ("http", "https") or not parts.netloc:
-        raise ConfigError(f"{name}: must be an http(s) URL on this PC, got {url!r}")
-    host = (parts.hostname or "").lower()
+        raise ConfigError(f"{name}: must be an http(s) URL on this PC")
+    if parts.username is not None or parts.password is not None:
+        raise ConfigError(f"{name}: credentials in a URL are not accepted")
     if host not in LOOPBACK_HOSTS:
-        raise ConfigError(f"{name}: all AI and the hub run on the hub PC; only 127.0.0.1, localhost or ::1 are allowed, got host {host!r}")
+        raise ConfigError(f"{name}: all AI and the hub run on the hub PC; only 127.0.0.1, localhost or ::1 are allowed")
     return url
 
 

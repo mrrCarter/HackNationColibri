@@ -47,7 +47,7 @@ def test_load_settings_refuses_a_cloud_url_from_the_environment(monkeypatch: pyt
     assert s.llm_base_url == "http://127.0.0.1:8080/v1" and not s.simulated_hub
 
 
-def test_http_clients_never_follow_redirects() -> None:
+def test_http_clients_never_follow_redirects_or_read_proxy_env() -> None:
     import inspect
 
     from hub_voice import hubclient
@@ -55,5 +55,21 @@ def test_http_clients_never_follow_redirects() -> None:
 
     for mod in (hubclient, translation):
         src = inspect.getsource(mod)
-        assert src.count("httpx.AsyncClient(") == src.count("follow_redirects=False"), mod.__name__
+        n = src.count("httpx.AsyncClient(")
+        assert n > 0 and n == src.count("follow_redirects=False") == src.count("trust_env=False"), mod.__name__
     assert cfg.LOOPBACK_HOSTS == frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://user:s3cr3t@127.0.0.1:8080/v1", "http://token-abc@localhost/v1", "http://[::1/v1", "http://[zz::1]:8080/v1", "http://:@127.0.0.1/v1"],
+    ids=["basic-auth", "bare-user", "unclosed-bracket", "bad-ipv6", "empty-auth"],
+)
+def test_credentialed_or_malformed_urls_fail_closed_without_echoing_anything(url: str) -> None:
+    with pytest.raises(ConfigError) as info:
+        require_loopback("SAUTI_HUB_BASE_URL", url)
+    msg = str(info.value)
+    for secret in ("s3cr3t", "token-abc", "127.0.0.1", "localhost", "zz::1", "[", "ValueError"):
+        assert secret not in msg, msg
+    assert msg.startswith("SAUTI_HUB_BASE_URL: ")
+    assert info.value.__cause__ is None  # parser details suppressed

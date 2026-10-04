@@ -150,7 +150,7 @@ class HubReadOnly:
             raise HubError("httpx is not installed")
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         try:
-            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False, trust_env=False) as client:
                 r = await client.get(self._base + path, params=params, headers=headers)
         except Exception as exc:  # network errors are reported, never logged with URLs that may carry tokens
             raise HubError(f"hub unreachable: {type(exc).__name__}") from exc
@@ -270,7 +270,7 @@ class HubActions:
             raise HubError("httpx is not installed")
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         try:
-            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False, trust_env=False) as client:
                 r = await client.post(self._base + path, json=body, headers=headers)
         except Exception as exc:
             raise HubError(f"hub unreachable: {type(exc).__name__}") from exc
