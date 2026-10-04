@@ -54,6 +54,8 @@ DEFAULT_DAILY_CAP = 20
 DEFAULT_MANIFEST = REPO_ROOT / "packages" / "experience" / "audio" / "manifest.json"
 EAT = timezone(timedelta(hours=3))  # Africa/Nairobi, no DST; fixed offset so no tz database is needed
 RESULT_STATUSES = ("refused", "simulated", "dispatched", "answered", "no_answer", "failed")
+# Written by the worker when the dial attempt has ended. The poller's "dispatched"/"simulated" are acceptance facts only.
+TERMINAL_STATUSES = frozenset({"answered", "no_answer", "failed"})
 
 
 def sha(text: str) -> str:
@@ -209,8 +211,15 @@ class CallLedger:
         return self._has("reserve", self._marker_name(alert_id)) or any(r.get("kind") == "reserve" and r.get("alert_id") == alert_id for r in self._rows())
 
     def count(self, day: str) -> int:
+        """Reservations that count against the day: marker slots, plus legacy JSONL reservations (written before the
+        markers existed, #65) for that day that have no marker. An upgrade mid-day therefore cannot exceed the cap."""
         slots = self.markers / "day" / day
-        return len(list(slots.iterdir())) if slots.is_dir() else 0
+        n = len(list(slots.iterdir())) if slots.is_dir() else 0
+        return n + self._legacy_count(day)
+
+    def _legacy_count(self, day: str) -> int:
+        legacy = {r.get("alert_id") for r in self._rows() if r.get("kind") == "reserve" and r.get("farm_day") == day and not self._has("reserve", self._marker_name(str(r.get("alert_id"))))}
+        return len(legacy)
 
     def reserve(self, alert_id: str, day: str, cap: int, now_ms: int) -> bool:
         """One reservation per alert, one of `cap` slots per farm day, both claimed atomically BEFORE any dispatch.
@@ -221,8 +230,11 @@ class CallLedger:
         # reservation for a different alert can never be refused by a slot that is about to be released.
         if not self._claim("reserve", self._marker_name(alert_id)):
             return False  # another poller reserved this alert
+        # Legacy same-day reservations (#65 rows without markers) hold the first slots conceptually, so only the
+        # remaining slot indices are claimable: the day never exceeds the cap across an upgrade (codex-mobile).
+        legacy = self._legacy_count(day)
         slot: str | None = None
-        for n in range(cap):
+        for n in range(legacy, cap):
             if self._claim("day", day, f"slot-{n:03d}"):
                 slot = f"slot-{n:03d}"
                 break
@@ -244,9 +256,14 @@ class CallLedger:
     def dial_claimed(self, alert_id: str) -> bool:
         return self._has("dial", self._marker_name(alert_id))
 
+    def terminal_results(self, alert_id: str) -> list[dict[str, Any]]:
+        """Results the WORKER writes after the dial attempt ended. 'dispatched' and 'simulated' are the poller's facts
+        about acceptance, not about the call, and never clear a quarantine."""
+        return [r for r in self.results(alert_id) if r.get("status") in TERMINAL_STATUSES]
+
     def quarantined(self, alert_id: str) -> bool:
-        """Claimed for dialing, no result recorded: an ambiguous interrupted dial."""
-        return self.dial_claimed(alert_id) and not self.results(alert_id)
+        """Claimed for dialing with no terminal worker result: an ambiguous interrupted dial (dispatched -> claim -> crash)."""
+        return self.dial_claimed(alert_id) and not self.terminal_results(alert_id)
 
     def record(self, alert_id: str, status: str, now_ms: int, **data: Any) -> None:
         if status not in RESULT_STATUSES:
