@@ -46,9 +46,16 @@ def test_two_pollers_cannot_both_reserve_one_alert_or_exceed_the_cap(tmp_path: P
         t.start()
     for t in threads:
         t.join()
-    assert sum(ok for i, ok in results if i == "dup") == 1
+    # invariants under any interleaving: the duplicated alert is reserved at most once, and the day never exceeds its cap
+    assert sum(ok for i, ok in results if i == "dup") <= 1
     assert sum(ok for _i, ok in results) == cap
     assert CallLedger(path).count(DAY) == cap
+    assert len({i for i, ok in results if ok}) == cap  # each successful reservation is a distinct alert
+    # and deterministically, alone: the same alert from two "pollers" reserves exactly once
+    solo = tmp_path / "solo.jsonl"
+    assert CallLedger(solo).reserve("same", DAY, cap, T0) is True
+    assert CallLedger(solo).reserve("same", DAY, cap, T0) is False
+    assert CallLedger(solo).count(DAY) == 1  # the losing attempt gave its slot back
     # the next day starts fresh; yesterday's slots are not reused today
     assert CallLedger(path).reserve("tomorrow", "2026-10-04", cap, T0)
 
