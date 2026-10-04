@@ -85,17 +85,22 @@ class ClipLibrary:
     def known(self, key: str) -> bool:
         return key in self.files
 
-    def resolve(self, keys: list[str]) -> tuple[list[Path], list[str]]:
-        """(playable files in order, keys whose file is not rendered yet). Unknown keys are not accepted here; validate first."""
-        playable: list[Path] = []
+    def resolve_pairs(self, keys: list[str]) -> tuple[list[tuple[str, Path]], list[str]]:
+        """([(key, file)] playable in order, keys whose file is not rendered yet). Key and file travel together, so a
+        missing earlier clip never shifts which label is reported as played (codex, #65). Validate unknown keys first."""
+        playable: list[tuple[str, Path]] = []
         missing: list[str] = []
         for k in keys:
             p = self.files.get(k)
             if p is not None and p.is_file() and self.root in p.parents:
-                playable.append(p)
+                playable.append((k, p))
             else:
                 missing.append(k)
         return playable, missing
+
+    def resolve(self, keys: list[str]) -> tuple[list[Path], list[str]]:
+        pairs, missing = self.resolve_pairs(keys)
+        return [p for _k, p in pairs], missing
 
 
 # ---------------------------------------------------------------- requests, plans, refusals
@@ -151,10 +156,35 @@ class Refusal:
 
 
 class CallLedger:
-    """Append-only JSONL: reservations and results. Read on every operation, so a restart changes nothing."""
+    """Durable call state: an append-only JSONL record plus ATOMIC marker files beside it.
+
+    The markers are the truth for anything two processes could race on (codex, #65): a reservation,
+    a day's cap slots and the pre-dial claim are each a file created with O_EXCL, which the OS makes
+    atomic and which survives restarts. The JSONL rows are the readable record. Read on every
+    operation; nothing is cached.
+    """
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.markers = path.with_suffix(path.suffix + ".d")
+
+    @staticmethod
+    def _marker_name(alert_id: str) -> str:
+        return hashlib.sha256(alert_id.encode("utf-8")).hexdigest()[:32]  # alert ids may hold ':' which filenames cannot
+
+    def _claim(self, *parts: str) -> bool:
+        """Atomically create the marker; False if it already exists."""
+        target = self.markers.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(str(target), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return False
+        os.close(fd)
+        return True
+
+    def _has(self, *parts: str) -> bool:
+        return self.markers.joinpath(*parts).exists()
 
     def _rows(self) -> list[dict[str, Any]]:
         if not self.path.exists():
@@ -176,17 +206,45 @@ class CallLedger:
             os.fsync(fh.fileno())
 
     def reserved(self, alert_id: str) -> bool:
-        return any(r.get("kind") == "reserve" and r.get("alert_id") == alert_id for r in self._rows())
+        return self._has("reserve", self._marker_name(alert_id)) or any(r.get("kind") == "reserve" and r.get("alert_id") == alert_id for r in self._rows())
 
     def count(self, day: str) -> int:
-        return sum(1 for r in self._rows() if r.get("kind") == "reserve" and r.get("farm_day") == day)
+        slots = self.markers / "day" / day
+        return len(list(slots.iterdir())) if slots.is_dir() else 0
 
     def reserve(self, alert_id: str, day: str, cap: int, now_ms: int) -> bool:
-        """One row per alert, counted against the day's cap, written BEFORE any dispatch. False = not reserved."""
-        if self.reserved(alert_id) or self.count(day) >= cap:
+        """One reservation per alert, one of `cap` slots per farm day, both claimed atomically BEFORE any dispatch.
+        Two pollers cannot both reserve the same alert, and the day never exceeds its cap."""
+        if self.reserved(alert_id):
             return False
-        self._append({"kind": "reserve", "alert_id": alert_id, "farm_day": day, "t_ms": now_ms})
+        slot: str | None = None
+        for n in range(cap):
+            if self._claim("day", day, f"slot-{n:03d}"):
+                slot = f"slot-{n:03d}"
+                break
+        if slot is None:
+            return False  # cap exhausted
+        if not self._claim("reserve", self._marker_name(alert_id)):
+            os.unlink(self.markers / "day" / day / slot)  # lost the race for this alert: give the slot back
+            return False
+        self._append({"kind": "reserve", "alert_id": alert_id, "farm_day": day, "slot": slot, "t_ms": now_ms})
         return True
+
+    def claim_dial(self, alert_id: str, now_ms: int) -> bool:
+        """The pre-dial claim: exactly one dispatched job may ever reach create_sip_participant for this alert, even if
+        LiveKit dispatches twice or a job restarts. A claim with no later result = an interrupted dial, which stays
+        quarantined (never re-dialed); the hub sees it as a missing result and a person follows up."""
+        if not self.reserved(alert_id) or not self._claim("dial", self._marker_name(alert_id)):
+            return False
+        self._append({"kind": "dial", "alert_id": alert_id, "t_ms": now_ms})
+        return True
+
+    def dial_claimed(self, alert_id: str) -> bool:
+        return self._has("dial", self._marker_name(alert_id))
+
+    def quarantined(self, alert_id: str) -> bool:
+        """Claimed for dialing, no result recorded: an ambiguous interrupted dial."""
+        return self.dial_claimed(alert_id) and not self.results(alert_id)
 
     def record(self, alert_id: str, status: str, now_ms: int, **data: Any) -> None:
         if status not in RESULT_STATUSES:
@@ -380,6 +438,29 @@ class Poller:
 # ---------------------------------------------------------------- LiveKit (live only; imported lazily)
 
 
+RINGING_TIMEOUT_S = 40
+MAX_CALL_DURATION_S = 180
+
+
+def build_sip_request(cfg: OutboundConfig, room_name: str):  # noqa: ANN201 - livekit.api.CreateSIPParticipantRequest
+    """The exact outbound request. Limits use the protobuf Duration type the installed livekit-api accepts (codex, #65:
+    `api.Duration` does not exist in livekit-api 1.2.1, so a guarded alias silently dropped both limits)."""
+    from google.protobuf.duration_pb2 import Duration
+    from livekit import api
+
+    return api.CreateSIPParticipantRequest(
+        sip_trunk_id=cfg.sip_trunk_id,
+        sip_call_to=dial_target(cfg),  # the ONLY number this worker dials
+        room_name=room_name,
+        participant_identity="owner-phone",
+        participant_name="Noor",
+        wait_until_answered=True,
+        play_dialtone=False,
+        ringing_timeout=Duration(seconds=RINGING_TIMEOUT_S),
+        max_call_duration=Duration(seconds=MAX_CALL_DURATION_S),
+    )
+
+
 def make_dispatcher(cfg: OutboundConfig):  # noqa: ANN201
     """Explicit dispatch of the sauti-alert worker into a per-alert room. Metadata carries alert_id + clip keys, never a number."""
     from livekit import api
@@ -411,9 +492,13 @@ async def alert_entrypoint(ctx) -> None:  # noqa: ANN001 - livekit JobContext
     if not ALERT_ID.match(alert_id) or not keys or not ledger.reserved(alert_id):
         log.warning("dispatch without a valid, reserved alert; leaving")
         return
-    files, missing = library.resolve(keys)
-    if not files:
+    pairs, missing = library.resolve_pairs(keys)
+    if not pairs:
         ledger.record(alert_id, "failed", now, reason="nothing_to_play")
+        return
+    # The pre-dial claim: a second dispatch for the same alert, or a restarted job, leaves here and never dials again.
+    if not ledger.claim_dial(alert_id, now):
+        log.warning("alert already claimed for dialing (duplicate dispatch, restart, or quarantined interrupted dial); leaving")
         return
 
     await ctx.connect()
@@ -421,25 +506,13 @@ async def alert_entrypoint(ctx) -> None:  # noqa: ANN001 - livekit JobContext
     played: list[str] = []
     try:
         async with api.LiveKitAPI() as lk:
-            await lk.sip.create_sip_participant(
-                api.CreateSIPParticipantRequest(
-                    sip_trunk_id=cfg.sip_trunk_id,
-                    sip_call_to=dial_target(cfg),  # the ONLY number this worker dials
-                    room_name=ctx.room.name,
-                    participant_identity="owner-phone",
-                    participant_name="Noor",
-                    wait_until_answered=True,
-                    play_dialtone=False,
-                    ringing_timeout=api.Duration(seconds=40) if hasattr(api, "Duration") else None,
-                    max_call_duration=api.Duration(seconds=180) if hasattr(api, "Duration") else None,
-                )
-            )
+            await lk.sip.create_sip_participant(build_sip_request(cfg, ctx.room.name))
         answered = True
         source = rtc.AudioSource(24000, 1)
         track = rtc.LocalAudioTrack.create_audio_track("alert", source)
         await ctx.room.local_participant.publish_track(track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
         await asyncio.sleep(0.8)
-        for key, path in zip(keys, files, strict=False):
+        for key, path in pairs:  # key and file travel together: a missing earlier clip never shifts the played labels
             for data, rate, channels, spc in wav_frames(path):
                 await source.capture_frame(rtc.AudioFrame(data, rate, channels, spc))
             played.append(key)
